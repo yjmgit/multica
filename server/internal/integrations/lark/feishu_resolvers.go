@@ -95,6 +95,10 @@ func (r *feishuInstallationResolver) ResolveInstallation(ctx context.Context, ms
 
 type feishuIdentityResolver struct{ store *ChannelStore }
 
+// ResolveSender maps the Feishu open_id to its bound Multica user. Access is
+// open: a sender with no binding, or whose bound user is no longer a
+// workspace member, talks to the agent as the installation's installer, so
+// anyone who can reach the bot can use it without binding a Multica account.
 func (r *feishuIdentityResolver) ResolveSender(ctx context.Context, inst engine.ResolvedInstallation, msg channel.InboundMessage) (engine.ResolvedIdentity, error) {
 	binding, err := r.store.GetLarkUserBindingByOpenID(ctx, GetUserBindingByOpenIDParams{
 		InstallationID: inst.ID,
@@ -102,7 +106,7 @@ func (r *feishuIdentityResolver) ResolveSender(ctx context.Context, inst engine.
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return engine.ResolvedIdentity{}, engine.ErrSenderUnbound
+			return r.resolveAsInstaller(ctx, inst)
 		}
 		return engine.ResolvedIdentity{}, err
 	}
@@ -111,9 +115,27 @@ func (r *feishuIdentityResolver) ResolveSender(ctx context.Context, inst engine.
 		return engine.ResolvedIdentity{}, err
 	}
 	if !isMember {
-		return engine.ResolvedIdentity{}, engine.ErrSenderNotMember
+		return r.resolveAsInstaller(ctx, inst)
 	}
 	return engine.ResolvedIdentity{UserID: binding.MulticaUserID}, nil
+}
+
+// resolveAsInstaller attributes a message from an unbound sender to the
+// installer. The installer must still be a workspace member; otherwise the
+// installation has no valid owner and the sender falls back to the binding
+// prompt.
+func (r *feishuIdentityResolver) resolveAsInstaller(ctx context.Context, inst engine.ResolvedInstallation) (engine.ResolvedIdentity, error) {
+	if !inst.InstallerUserID.Valid {
+		return engine.ResolvedIdentity{}, engine.ErrSenderUnbound
+	}
+	isMember, err := r.store.IsWorkspaceMember(ctx, inst.WorkspaceID, inst.InstallerUserID)
+	if err != nil {
+		return engine.ResolvedIdentity{}, err
+	}
+	if !isMember {
+		return engine.ResolvedIdentity{}, engine.ErrSenderUnbound
+	}
+	return engine.ResolvedIdentity{UserID: inst.InstallerUserID}, nil
 }
 
 // ---- dedup ----
