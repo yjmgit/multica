@@ -20,6 +20,7 @@ type InboundMessage struct {
 	ChatID       ChatID
 	ChatType     ChatType
 	MessageID    string
+	SenderType   string
 	SenderOpenID OpenID
 	Body         string
 	// Content is the raw msg_type-specific JSON string Lark sends in

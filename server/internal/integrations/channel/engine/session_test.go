@@ -127,6 +127,10 @@ type fakeSessionQueries struct {
 	raceWinner         pgtype.UUID
 }
 
+func (f *fakeSessionQueries) IsChannelSessionIdle(context.Context, db.IsChannelSessionIdleParams) (bool, error) {
+	return false, nil
+}
+
 func newFake() *fakeSessionQueries {
 	return &fakeSessionQueries{bindings: map[string]pgtype.UUID{}, markRows: 1, messageID: uid(42), updateMediaRows: 1, contextRevision: 1}
 }

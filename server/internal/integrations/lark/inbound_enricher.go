@@ -69,6 +69,7 @@ type Enricher interface {
 
 // InboundEnricherConfig tunes the enricher. All fields default.
 type InboundEnricherConfig struct {
+	GroupMembers GroupMemberPolicy
 	// MaxForwardChildren caps inlined forward children. <=0 uses
 	// defaultMaxForwardChildren.
 	MaxForwardChildren int
@@ -85,6 +86,7 @@ type InboundEnricherConfig struct {
 }
 
 type inboundEnricher struct {
+	groupMembers       GroupMemberPolicy
 	client             APIClient
 	maxForwardChildren int
 	recentContextSize  int
@@ -102,6 +104,7 @@ func NewInboundEnricher(client APIClient, cfg InboundEnricherConfig) Enricher {
 		cfg.Logger = slog.Default()
 	}
 	return &inboundEnricher{
+		groupMembers:       cfg.GroupMembers,
 		client:             client,
 		maxForwardChildren: cfg.MaxForwardChildren,
 		recentContextSize:  cfg.RecentContextSize,
@@ -167,7 +170,7 @@ func (e *inboundEnricher) Enrich(ctx context.Context, msg InboundMessage, creds 
 	}
 
 	isForward := msg.MessageType == larkMsgTypeMergeForward
-	wantRecent := !startChat && e.recentContextSize > 0 && msg.ChatType == ChatTypeGroup && msg.AddressedToBot
+	wantRecent := !e.groupMembers.Enabled(msg.AppID) && !startChat && e.recentContextSize > 0 && msg.ChatType == ChatTypeGroup && msg.AddressedToBot
 	if msg.ParentID == "" && !isForward && !wantRecent {
 		// Nothing to expand and no group prefetch wanted — no network call.
 		return msg

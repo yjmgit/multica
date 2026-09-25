@@ -972,7 +972,8 @@ SELECT
         -- slackSessionRouting, telegramSessionRouting). Without this, a
         -- recovered pre-migration run in a Slack channel thread or a Telegram
         -- forum topic would answer in the parent conversation.
-        WHEN COALESCE(binding.config ->> 'chat_id', binding.config ->> 'channel_id', '')
+        WHEN binding.config ->> 'member_open_id' IS NULL
+         AND COALESCE(binding.config ->> 'chat_id', binding.config ->> 'channel_id', '')
              NOT IN ('', binding.channel_chat_id) THEN binding.last_thread_id
         -- A non-isolated binding's cursor names whichever thread spoke last,
         -- which is not this run's. Nothing we can justify.

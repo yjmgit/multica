@@ -1389,6 +1389,12 @@ func TestChannelTaskDeliveryRecoversThreadForIsolatedBinding(t *testing.T) {
 			config:     `{"channel_id":%q}`,
 			wantThread: "",
 		},
+		{
+			name:       "member route does not recover another question's thread",
+			bindingKey: func(chatID string) string { return "member:" + chatID + ":ou_a" },
+			config:     `{"chat_id":%q,"member_open_id":"ou_a"}`,
+			wantThread: "",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := seedIsolatedBindingFixture(t, pool, tc.bindingKey, tc.config)

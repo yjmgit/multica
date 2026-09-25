@@ -400,6 +400,10 @@ func seatCapacityExecutor(cloudURL string) seatcapacity.Executor {
 // callers that only need the HTTP handler (tests, the simple
 // NewRouter shim) discard the second value.
 func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus, analyticsClient analytics.Client, rdb redis.UniversalClient, opts RouterOptions) (chi.Router, *handler.Handler) {
+	groupMembers, err := lark.ParseGroupMemberPolicy(os.Getenv("MULTICA_LARK_GROUP_MEMBER_APP_IDS"), os.Getenv("MULTICA_LARK_GROUP_SESSION_IDLE_TTL"))
+	if err != nil {
+		panic(err)
+	}
 	queries := db.New(pool)
 	emailSvc := service.NewEmailService()
 	daemonHub := opts.DaemonHub
@@ -670,7 +674,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				// Registering the Factory (connect/send) + ResolverSet
 				// (inbound pipeline seams) is all it takes to add the platform
 				// to the engine — no engine edit.
-				connector, connectorLabel := buildLarkConnector(installSvc, larkClient)
+				connector, connectorLabel := buildLarkConnector(installSvc, larkClient, groupMembers)
 				lark.RegisterFeishu(channelRegistry, lark.FeishuChannelDeps{
 					Connector:   connector,
 					APIClient:   larkClient,
@@ -679,7 +683,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				})
 				mediaResolver := lark.NewFeishuMediaResolver(larkClient, installSvc, store, engine.NewDBMediaIntentLedger(queries), slog.Default())
 				channelRouter.Register(channel.TypeFeishu, lark.NewFeishuResolverSet(
-					cs, feishuSession, auditLogger, resolverReplier, typingIndicator, mediaResolver,
+					cs, feishuSession, auditLogger, resolverReplier, typingIndicator, mediaResolver, groupMembers,
 				))
 				slog.Info("lark inbound pipeline wired", "connector", connectorLabel)
 
@@ -2459,7 +2463,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 //
 // Returns the connector plus a short label for the boot log:
 // "ws-long-conn" in the healthy case, "noop" in the fallback case.
-func buildLarkConnector(installSvc *lark.InstallationService, apiClient lark.APIClient) (lark.EventConnector, string) {
+func buildLarkConnector(installSvc *lark.InstallationService, apiClient lark.APIClient, groupMembers lark.GroupMemberPolicy) (lark.EventConnector, string) {
 	endpointFetcher, err := lark.NewHTTPConnectionTokenFetcher(lark.HTTPConnectionTokenConfig{
 		BaseURL: strings.TrimSpace(os.Getenv("MULTICA_LARK_CALLBACK_BASE_URL")),
 		Logger:  slog.Default(),
@@ -2469,6 +2473,7 @@ func buildLarkConnector(installSvc *lark.InstallationService, apiClient lark.API
 		return lark.NewNoopConnector(slog.Default()), "noop"
 	}
 	decoder := lark.NewLarkJSONFrameDecoder()
+	decoder.GroupMembers = groupMembers
 	dialer := lark.NewGorillaDialer()
 	if proxyURL := strings.TrimSpace(os.Getenv("MULTICA_LARK_WS_PROXY_URL")); proxyURL != "" {
 		dialer.ProxyURL = proxyURL
@@ -2494,6 +2499,7 @@ func buildLarkConnector(installSvc *lark.InstallationService, apiClient lark.API
 	// connector's resolved credentials and runs under the connector's
 	// EnrichTimeout so it cannot overrun the Lark long-conn ACK budget.
 	enricher := lark.NewInboundEnricher(apiClient, lark.InboundEnricherConfig{
+		GroupMembers:      groupMembers,
 		RecentContextSize: lark.DefaultRecentContextSize,
 		Logger:            slog.Default(),
 	})

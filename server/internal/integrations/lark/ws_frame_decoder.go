@@ -29,7 +29,7 @@ import (
 //
 // The decoder is stateless and goroutine-safe — a single instance
 // serves every supervisor goroutine.
-type LarkJSONFrameDecoder struct{}
+type LarkJSONFrameDecoder struct{ GroupMembers GroupMemberPolicy }
 
 func NewLarkJSONFrameDecoder() *LarkJSONFrameDecoder { return &LarkJSONFrameDecoder{} }
 
@@ -91,6 +91,7 @@ func (d *LarkJSONFrameDecoder) Decode(payload []byte, inst Installation) (Inboun
 		ChatID:       ChatID(evt.Message.ChatID),
 		ChatType:     normalizeChatType(evt.Message.ChatType),
 		MessageID:    evt.Message.MessageID,
+		SenderType:   evt.Sender.SenderType,
 		SenderOpenID: OpenID(evt.Sender.SenderID.OpenID),
 		MessageType:  evt.Message.MessageType,
 		Content:      evt.Message.Content,
@@ -107,6 +108,11 @@ func (d *LarkJSONFrameDecoder) Decode(payload []byte, inst Installation) (Inboun
 		ThreadID: evt.Message.ThreadID,
 	}
 
+	// For operator-enabled group access, the connection's installation is the
+	// authority. Reject malformed or non-human events before enrichment.
+	if d.GroupMembers.Enabled(inst.AppID) && msg.ChatType == ChatTypeGroup && !d.GroupMembers.accepts(inst, msg) {
+		return InboundMessage{}, false, nil
+	}
 	botUnionID := ""
 	if inst.BotUnionID.Valid {
 		botUnionID = inst.BotUnionID.String

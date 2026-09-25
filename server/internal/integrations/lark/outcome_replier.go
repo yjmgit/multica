@@ -34,6 +34,7 @@ type OutcomeReplier interface {
 // replier needs. Pinned via an interface so tests substitute a fake.
 type OutcomeReplierQueries interface {
 	GetAgent(ctx context.Context, id pgtype.UUID) (db.Agent, error)
+	HasPendingChannelPredecessor(context.Context, pgtype.UUID) (bool, error)
 }
 
 // BindingTokenMinter is the narrow dependency the outcome replier needs from
@@ -189,7 +190,11 @@ func (r *LarkOutcomeReplier) Reply(ctx context.Context, inst Installation, msg I
 			)
 		}
 	case OutcomeChatStarted:
-		if err := r.sendChatNotice(ctx, inst, msg, chatStartedCopy); err != nil {
+		copy := chatStartedCopy
+		if pending, err := r.queries.HasPendingChannelPredecessor(ctx, res.ChatSessionID); err == nil && pending {
+			copy = "已开始新会话。之前的任务仍在处理中，后续提问会在它结束后处理。"
+		}
+		if err := r.sendChatNotice(ctx, inst, msg, copy); err != nil {
 			r.log.Warn("lark outcome replier: new-chat confirmation failed", "installation_id", uuidString(inst.ID), "chat_id", string(msg.ChatID), "err", err.Error())
 		}
 	case OutcomeIssueUsage:
@@ -205,6 +210,13 @@ func (r *LarkOutcomeReplier) Reply(ctx context.Context, inst Installation, msg I
 			)
 		}
 	case OutcomeIngested:
+		if res.ChatSessionID.Valid && !res.IssueID.Valid {
+			if pending, err := r.queries.HasPendingChannelPredecessor(ctx, res.ChatSessionID); err == nil && pending {
+				if err := r.sendChatNotice(ctx, inst, msg, "已收到，之前的任务仍在处理中，这条提问将在它结束后处理。"); err != nil {
+					r.log.Warn("lark: queue notice failed", "error", err)
+				}
+			}
+		}
 		// The agent's chat reply itself goes through the Patcher. An /issue
 		// command gets an immediate product result: either the newly created
 		// issue or the active duplicate that blocked it. Gate on IssueID.Valid
@@ -367,6 +379,9 @@ func (r *LarkOutcomeReplier) sendChatNotice(ctx context.Context, inst Installati
 	if agent, aerr := r.queries.GetAgent(ctx, inst.AgentID); aerr == nil && agent.Name != "" {
 		header = agent.Name
 	}
+	if msg.ChatType == ChatTypeGroup {
+		body = prependMarkdownMention(string(msg.SenderOpenID), body)
+	}
 	cardJSON, err := renderNoticeCard(header, body)
 	if err != nil {
 		return fmt.Errorf("render notice card: %w", err)
@@ -418,7 +433,7 @@ func renderNoticeCard(header, body string) (string, error) {
 			map[string]any{
 				"tag": "div",
 				"text": map[string]any{
-					"tag":     "plain_text",
+					"tag":     "lark_md",
 					"content": body,
 				},
 			},
@@ -438,8 +453,8 @@ func renderNoticeCard(header, body string) (string, error) {
 const (
 	agentOfflineCopy             = "Agent 当前离线，消息已记录。下次 daemon 上线后会自动继续处理。"
 	agentArchivedCopy            = "这个 Agent 已被归档，无法继续处理消息。请联系工作区管理员恢复或重新绑定。"
-	freshPendingCopy             = "✅ 已准备从空上下文运行。你的下一条聊天消息仍会进入当前对话，但不会带上之前的上下文。"
-	chatStartedCopy              = "✅ 已新建 Multica 对话。你的下一条消息会进入该对话。"
+	freshPendingCopy             = "已重置上下文，下一条消息将重新开始。"
+	chatStartedCopy              = "已开始新会话，后续提问将从这里继续。"
 	issueUsageCopy               = "请填写任务标题，格式如下：\n\n`/issue <标题>`\n`[描述]`（可选）"
 	issueUsageWithMediaCopy      = "请添加标题，并与图片或视频一起重新发送（*图片或视频可以位于命令之前或之后*）：\n\n`/issue <标题>`\n`[描述]`（可选）"
 	bindingPromptUnavailableCopy = "你还未绑定 Multica 账户，绑定卡片未能发送到你的私聊。\n请先打开机器人对话并发送一条消息，再回到群里重试；仍失败请联系管理员检查应用可用范围。"

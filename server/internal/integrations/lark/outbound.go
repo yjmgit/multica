@@ -547,7 +547,7 @@ func isTopicIsolated(b ChatSessionBinding) bool {
 	if err := json.Unmarshal(b.Config, &cfg); err != nil {
 		return false
 	}
-	return cfg.ChatID != "" && cfg.ChatID != b.ChannelChatID
+	return cfg.MemberOpenID == "" && cfg.ChatID != "" && cfg.ChatID != b.ChannelChatID
 }
 
 // topicSendWithoutTrigger reports that this task belongs to a topic-isolated
@@ -661,6 +661,14 @@ func (p *Patcher) fail(ctx context.Context, creds InstallationCredentials, bindi
 			"chat_session_id", uuidString(binding.ChatSessionID),
 			"channel_chat_id", binding.ChannelChatID)
 		return nil
+	}
+	var memberConfig larkBindingConfig
+	if json.Unmarshal(binding.Config, &memberConfig) == nil && memberConfig.MemberOpenID != "" {
+		return sendWithReplyFallback(p.cfg.Logger, "send group failure", threadReplyTarget(binding), func(t ReplyTarget) error {
+			_, err := p.client.SendTextMessage(ctx, SendTextParams{InstallationID: creds, ChatID: outboundChatID(binding),
+				Text: prependTextMention(mentionOpenID(binding), "本次任务未能完成，请稍后重试或补充说明。"), ReplyTarget: t})
+			return err
+		})
 	}
 	render, err := p.cfg.Renderer.Render(RenderInput{
 		Kind:         CardKindError,

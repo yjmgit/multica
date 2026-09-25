@@ -115,8 +115,13 @@ func (s stubCredentialsResolver) DecryptAppSecret(inst Installation) (string, er
 
 // stubReplierQueries returns a fixed agent.
 type stubReplierQueries struct {
-	agent db.Agent
-	err   error
+	agent   db.Agent
+	err     error
+	pending bool
+}
+
+func (s stubReplierQueries) HasPendingChannelPredecessor(context.Context, pgtype.UUID) (bool, error) {
+	return s.pending, nil
 }
 
 func (s stubReplierQueries) GetAgent(ctx context.Context, id pgtype.UUID) (db.Agent, error) {
@@ -247,7 +252,7 @@ func TestLarkOutcomeReplierCommandOutcomesSendGuidance(t *testing.T) {
 		hadMedia bool
 		want     string
 	}{
-		{"fresh pending", OutcomeFreshPending, false, "下一条聊天消息"},
+		{"fresh pending", OutcomeFreshPending, false, "下一条消息"},
 		{"plain issue usage", OutcomeIssueUsage, false, "请填写任务标题"},
 		{"issue usage with media", OutcomeIssueUsage, true, "请添加标题，并与图片或视频一起重新发送"},
 	} {

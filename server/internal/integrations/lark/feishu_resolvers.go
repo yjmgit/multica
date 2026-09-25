@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -44,12 +45,12 @@ func larkMsgFromRaw(msg channel.InboundMessage) (InboundMessage, error) {
 // shared session service, audit logger, and (optional) outbound replier +
 // typing indicator. Feishu is just another consumer of the channel-agnostic
 // engine.ChatSession — there is no Feishu-specific session implementation.
-func NewFeishuResolverSet(store *ChannelStore, session *engine.ChatSession, audit AuditLogger, replier OutcomeReplier, typing *TypingIndicatorManager, media engine.MediaResolver) engine.ResolverSet {
+func NewFeishuResolverSet(store *ChannelStore, session *engine.ChatSession, audit AuditLogger, replier OutcomeReplier, typing *TypingIndicatorManager, media engine.MediaResolver, groupMembers GroupMemberPolicy) engine.ResolverSet {
 	set := engine.ResolverSet{
 		Installation: &feishuInstallationResolver{store: store},
-		Identity:     &feishuIdentityResolver{store: store},
+		Identity:     &feishuIdentityResolver{store: store, groupMembers: groupMembers},
 		Dedup:        &feishuDeduper{store: store},
-		Session:      &feishuSessionBinder{session: session},
+		Session:      &feishuSessionBinder{session: session, groupMembers: groupMembers},
 		Audit:        &feishuAuditor{audit: audit},
 		OriginType:   originFeishuChat,
 	}
@@ -93,13 +94,23 @@ func (r *feishuInstallationResolver) ResolveInstallation(ctx context.Context, ms
 
 // ---- identity ----
 
-type feishuIdentityResolver struct{ store *ChannelStore }
+type feishuIdentityResolver struct {
+	store        *ChannelStore
+	groupMembers GroupMemberPolicy
+}
 
 // ResolveSender maps the Feishu open_id to its bound Multica user. Access is
 // open: a sender with no binding, or whose bound user is no longer a
 // workspace member, talks to the agent as the installation's installer, so
 // anyone who can reach the bot can use it without binding a Multica account.
+// Group messages to a bot enabled by GroupMemberPolicy always run as the
+// installer, after the event passes the policy's shape checks.
 func (r *feishuIdentityResolver) ResolveSender(ctx context.Context, inst engine.ResolvedInstallation, msg channel.InboundMessage) (engine.ResolvedIdentity, error) {
+	if r.groupMembers.Configured() && msg.Source.ChatType == channel.ChatTypeGroup {
+		if identity, handled, err := r.resolveGroupMember(ctx, inst, msg); handled {
+			return identity, err
+		}
+	}
 	binding, err := r.store.GetLarkUserBindingByOpenID(ctx, GetUserBindingByOpenIDParams{
 		InstallationID: inst.ID,
 		ChannelUserID:  msg.Source.SenderID,
@@ -118,6 +129,32 @@ func (r *feishuIdentityResolver) ResolveSender(ctx context.Context, inst engine.
 		return r.resolveAsInstaller(ctx, inst)
 	}
 	return engine.ResolvedIdentity{UserID: binding.MulticaUserID}, nil
+}
+
+// resolveGroupMember handles a group message when its bot is enabled by the
+// GroupMemberPolicy (handled=true). Membership in a group containing the bot
+// grants use of the installer's identity; malformed or non-human events are
+// rejected rather than falling through to the binding lookup.
+func (r *feishuIdentityResolver) resolveGroupMember(ctx context.Context, inst engine.ResolvedInstallation, msg channel.InboundMessage) (engine.ResolvedIdentity, bool, error) {
+	lm, err := larkMsgFromRaw(msg)
+	if err != nil {
+		return engine.ResolvedIdentity{}, true, err
+	}
+	if !r.groupMembers.Enabled(lm.AppID) {
+		return engine.ResolvedIdentity{}, false, nil
+	}
+	li, ok := inst.Platform.(Installation)
+	if !ok || !r.groupMembers.accepts(li, lm) || msg.Source.SenderID != string(lm.SenderOpenID) || msg.Source.ChatID != string(lm.ChatID) {
+		return engine.ResolvedIdentity{}, true, engine.ErrSenderNotMember
+	}
+	member, err := r.store.IsWorkspaceMember(ctx, inst.WorkspaceID, inst.InstallerUserID)
+	if err != nil {
+		return engine.ResolvedIdentity{}, true, err
+	}
+	if !member {
+		return engine.ResolvedIdentity{}, true, engine.ErrSenderNotMember
+	}
+	return engine.ResolvedIdentity{UserID: inst.InstallerUserID}, true, nil
 }
 
 // resolveAsInstaller attributes a message from an unbound sender to the
@@ -188,7 +225,7 @@ type chatSession interface {
 }
 
 func (r *feishuSessionBinder) StartSession(ctx context.Context, p engine.StartSessionParams) (engine.StartSessionResult, error) {
-	bindingKey, config := larkSessionRouting(p.Message)
+	bindingKey, config := r.sessionRouting(p.Message)
 	result, err := r.session.StartSession(ctx, engine.StartSessionInput{
 		EnsureSessionInput: engine.EnsureSessionInput{
 			WorkspaceID: p.Installation.WorkspaceID, AgentID: p.Installation.AgentID,
@@ -205,13 +242,17 @@ func (r *feishuSessionBinder) StartSession(ctx context.Context, p engine.StartSe
 	return engine.StartSessionResult{SessionID: result.SessionID, BindingID: result.BindingID, RouteRevision: result.RouteRevision, Append: result.Append}, err
 }
 
-type feishuSessionBinder struct{ session chatSession }
+type feishuSessionBinder struct {
+	session      chatSession
+	groupMembers GroupMemberPolicy
+}
 
 // larkBindingConfig is the opaque outbound routing persisted on the chat
 // binding's config when the binding key is a composite (Lark topic): the real
 // chat id lives here so the outbound path can post back.
 type larkBindingConfig struct {
-	ChatID string `json:"chat_id"`
+	ChatID       string `json:"chat_id"`
+	MemberOpenID string `json:"member_open_id,omitempty"`
 }
 
 // larkSessionRouting derives the session-isolation key (stored as
@@ -231,8 +272,25 @@ func larkSessionRouting(msg channel.InboundMessage) (bindingKey string, config [
 	return chatID + ":" + msg.Source.ThreadID, cfg
 }
 
+func (r *feishuSessionBinder) memberGroup(msg channel.InboundMessage) bool {
+	lm, err := larkMsgFromRaw(msg)
+	return err == nil && r.groupMembers.Enabled(lm.AppID) && msg.Source.ChatType == channel.ChatTypeGroup
+}
+
+func (r *feishuSessionBinder) sessionRouting(msg channel.InboundMessage) (string, []byte) {
+	if !r.memberGroup(msg) {
+		return larkSessionRouting(msg)
+	}
+	cfg, _ := json.Marshal(larkBindingConfig{ChatID: msg.Source.ChatID, MemberOpenID: msg.Source.SenderID})
+	return "member:" + msg.Source.ChatID + ":" + msg.Source.SenderID, cfg
+}
+
 func (r *feishuSessionBinder) EnsureSession(ctx context.Context, p engine.EnsureSessionParams) (pgtype.UUID, error) {
-	bindingKey, config := larkSessionRouting(p.Message)
+	bindingKey, config := r.sessionRouting(p.Message)
+	idleTTL := time.Duration(0)
+	if r.memberGroup(p.Message) {
+		idleTTL = r.groupMembers.IdleTTL
+	}
 	return r.session.EnsureSession(ctx, engine.EnsureSessionInput{
 		WorkspaceID:    p.Installation.WorkspaceID,
 		AgentID:        p.Installation.AgentID,
@@ -240,6 +298,7 @@ func (r *feishuSessionBinder) EnsureSession(ctx context.Context, p engine.Ensure
 		Sender:         p.Sender,
 		BindingKey:     bindingKey,
 		BindingConfig:  config,
+		IdleTTL:        idleTTL,
 		ChatType:       p.Message.Source.ChatType,
 	})
 }

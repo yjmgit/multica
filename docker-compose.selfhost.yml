@@ -173,6 +173,8 @@ services:
       # installs to region=lark on first boot, then you can clear them.
       # See docs/lark-bot-integration.
       MULTICA_LARK_SECRET_KEY: ${MULTICA_LARK_SECRET_KEY:-}
+      MULTICA_LARK_GROUP_MEMBER_APP_IDS: ${MULTICA_LARK_GROUP_MEMBER_APP_IDS:-}
+      MULTICA_LARK_GROUP_SESSION_IDLE_TTL: ${MULTICA_LARK_GROUP_SESSION_IDLE_TTL:-2h}
       MULTICA_LARK_HTTP_BASE_URL: ${MULTICA_LARK_HTTP_BASE_URL:-}
       MULTICA_LARK_CALLBACK_BASE_URL: ${MULTICA_LARK_CALLBACK_BASE_URL:-}
       # Slack bot integration. MULTICA_SLACK_SECRET_KEY is the opt-in: unset =

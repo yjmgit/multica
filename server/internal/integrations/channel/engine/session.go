@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -42,6 +43,7 @@ type TxStarter interface {
 // service needs. *db.Queries satisfies it through the dbSessionQueries adapter
 // (whose WithTx returns the interface type); tests supply an in-memory fake.
 type SessionQueries interface {
+	IsChannelSessionIdle(ctx context.Context, arg db.IsChannelSessionIdleParams) (bool, error)
 	WithTx(tx pgx.Tx) SessionQueries
 	GetChannelChatSessionBinding(ctx context.Context, arg db.GetChannelChatSessionBindingParams) (db.ChannelChatSessionBinding, error)
 	LockWorkspaceForChatSessionCreate(ctx context.Context, id pgtype.UUID) (pgtype.UUID, error)
@@ -82,6 +84,10 @@ type SessionQueries interface {
 // to give WithTx an interface return type so the transactional path stays
 // behind SessionQueries.
 type dbSessionQueries struct{ q *db.Queries }
+
+func (a dbSessionQueries) IsChannelSessionIdle(ctx context.Context, arg db.IsChannelSessionIdleParams) (bool, error) {
+	return a.q.IsChannelSessionIdle(ctx, arg)
+}
 
 func (a dbSessionQueries) WithTx(tx pgx.Tx) SessionQueries {
 	return dbSessionQueries{q: a.q.WithTx(tx)}
@@ -277,6 +283,7 @@ func newChatSessionWith(q SessionQueries, tx TxStarter, channelType channel.Type
 // Sender is the already-resolved Multica user (the session creator: the sole
 // human for p2p, the installer for group chats — the caller decides which).
 type EnsureSessionInput struct {
+	IdleTTL        time.Duration
 	WorkspaceID    pgtype.UUID
 	AgentID        pgtype.UUID
 	InstallationID pgtype.UUID
@@ -296,6 +303,10 @@ func (s *ChatSession) EnsureSession(ctx context.Context, in EnsureSessionInput) 
 
 	existing, err := s.q.GetChannelChatSessionBinding(ctx, lookup)
 	if err == nil {
+		if in.IdleTTL > 0 {
+			result, err := s.StartSession(ctx, StartSessionInput{EnsureSessionInput: in, OnlyIfIdleFor: in.IdleTTL})
+			return result.SessionID, err
+		}
 		return existing.ChatSessionID, nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
@@ -409,6 +420,7 @@ type AppendInput struct {
 // StartSessionInput is the shared, transactional implementation of /new.
 // The adapter supplies only its route key/config and optional platform fence.
 type StartSessionInput struct {
+	OnlyIfIdleFor time.Duration
 	EnsureSessionInput
 	// Initiator is the authenticated sender of the /new command. Sender in the
 	// embedded EnsureSessionInput remains the owner of the newly created Chat.
@@ -465,6 +477,17 @@ func (s *ChatSession) StartSession(ctx context.Context, in StartSessionInput) (S
 		})
 		if err != nil || locked.ID != current.ID {
 			return StartSessionResult{}, ErrRouteChanged
+		}
+		if in.OnlyIfIdleFor > 0 {
+			idle, err := qtx.IsChannelSessionIdle(ctx, db.IsChannelSessionIdleParams{
+				ChatSessionID: current.ChatSessionID, IdleSeconds: in.OnlyIfIdleFor.Seconds(),
+			})
+			if err != nil {
+				return StartSessionResult{}, fmt.Errorf("check channel idle time: %w", err)
+			}
+			if !idle {
+				return StartSessionResult{SessionID: current.ChatSessionID, BindingID: locked.ID, RouteRevision: locked.RouteRevision}, nil
+			}
 		}
 		if in.BeforeWrite != nil {
 			if err := in.BeforeWrite(ctx, tx); err != nil {
