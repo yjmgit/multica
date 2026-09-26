@@ -735,6 +735,9 @@ func buildChatPrompt(task Task) string {
 	default:
 		fmt.Fprintf(&b, "\nThis reply is delivered to %s as text. You cannot attach a file to it: `multica attachment upload` binds to a Multica chat reply, which this is not. If you produce a file, describe it in words — never write its local path as a link, and never upload it and then write as though it arrived.\n", channelDisplayName(task.ChatChannelType))
 	}
+	if task.ChatChannelType == execenv.ChannelTypeFeishu {
+		b.WriteString("\nYou can act in Feishu beyond this reply with `multica lark`: `send --in 2m --mention-requester \"...\"` schedules a reminder the server delivers later (even after this run ends); `send --file <path>` / `--chat <chat_id>` / `--user <open_id>` sends files or messages elsewhere; `doc <url>` reads a Feishu doc, wiki page or sheet the bot can access; `members` lists this chat's people with their open_ids; `group create` / `group add` create a group or pull people in. When asked for a reminder, a file, a doc, or a group, use these instead of saying you cannot. `multica lark --help` for details.\n")
+	}
 	return b.String()
 }
 

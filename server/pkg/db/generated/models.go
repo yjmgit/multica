@@ -459,6 +459,27 @@ type ChannelReplyDelivery struct {
 	AttemptDepth   int32              `json:"attempt_depth"`
 }
 
+type ChannelScheduledMessage struct {
+	ID             pgtype.UUID        `json:"id"`
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+	InstallationID pgtype.UUID        `json:"installation_id"`
+	AgentID        pgtype.UUID        `json:"agent_id"`
+	ChannelType    string             `json:"channel_type"`
+	TaskID         pgtype.UUID        `json:"task_id"`
+	ReceiveIDType  string             `json:"receive_id_type"`
+	ReceiveID      string             `json:"receive_id"`
+	ReplyMessageID string             `json:"reply_message_id"`
+	ReplyInThread  bool               `json:"reply_in_thread"`
+	Text           string             `json:"text"`
+	MentionOpenIds []string           `json:"mention_open_ids"`
+	FireAt         pgtype.Timestamptz `json:"fire_at"`
+	Status         string             `json:"status"`
+	LastError      string             `json:"last_error"`
+	SentMessageID  string             `json:"sent_message_id"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
 type ChannelTaskDelivery struct {
 	TaskID           pgtype.UUID        `json:"task_id"`
 	BindingID        pgtype.UUID        `json:"binding_id"`

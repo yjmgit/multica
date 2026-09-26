@@ -1,0 +1,1 @@
+DROP INDEX CONCURRENTLY IF EXISTS channel_scheduled_message_agent_idx;

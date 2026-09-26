@@ -836,3 +836,68 @@ func (c *APIClient) HealthCheck(ctx context.Context) (string, error) {
 	}
 	return strings.TrimSpace(string(data)), nil
 }
+
+// MultipartFile is one file part for PostMultipart.
+type MultipartFile struct {
+	Field    string
+	Filename string
+	Data     []byte
+}
+
+// PostMultipart posts a multipart form (repeatable text fields plus file
+// parts) and decodes the JSON response into out.
+func (c *APIClient) PostMultipart(ctx context.Context, path string, fields map[string][]string, files []MultipartFile, out any) error {
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	for key, values := range fields {
+		for _, v := range values {
+			if err := writer.WriteField(key, v); err != nil {
+				return fmt.Errorf("write field %s: %w", key, err)
+			}
+		}
+	}
+	for _, f := range files {
+		part, err := writer.CreateFormFile(f.Field, filepath.Base(f.Filename))
+		if err != nil {
+			return fmt.Errorf("create form file: %w", err)
+		}
+		if _, err := part.Write(f.Data); err != nil {
+			return fmt.Errorf("write file data: %w", err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		return fmt.Errorf("close multipart writer: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+path, &body)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	c.setHeaders(req)
+
+	httpClient := c.HTTPClient
+	if deadline, ok := ctx.Deadline(); ok {
+		if remaining := time.Until(deadline); remaining > httpClient.Timeout {
+			clientCopy := *httpClient
+			clientCopy.Timeout = remaining
+			httpClient = &clientCopy
+		}
+	}
+	resp, err := httpClient.Do(req)
+	err = wrapTransport(req, err)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return newHTTPError(http.MethodPost, path, resp)
+	}
+	if out == nil {
+		return nil
+	}
+	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		return fmt.Errorf("decode response: %w", err)
+	}
+	return nil
+}

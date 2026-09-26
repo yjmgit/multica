@@ -212,6 +212,7 @@ type Patcher struct {
 	credentials     CredentialsResolver
 	client          APIClient
 	typingIndicator *TypingIndicatorManager
+	attachments     *ReplyAttachmentDeps
 	cfg             PatcherConfig
 }
 
@@ -402,7 +403,9 @@ func (p *Patcher) processEvent(ctx context.Context, e events.Event) error {
 
 	switch e.Type {
 	case protocol.EventChatDone:
-		return p.sendChatReply(ctx, creds, binding, mentionOpenID(binding), e.Payload)
+		err := p.sendChatReply(ctx, creds, binding, mentionOpenID(binding), e.Payload)
+		p.deliverReplyAttachments(creds, binding, inst.WorkspaceID, e.Payload)
+		return err
 	case protocol.EventTaskFailed:
 		return p.fail(ctx, creds, binding, taskID, agentName, e.Payload)
 	}

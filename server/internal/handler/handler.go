@@ -289,6 +289,9 @@ type Handler struct {
 	// UI consults IsConfigured() to decide whether to surface install
 	// entry points.
 	LarkAPIClient lark.APIClient
+	// LarkTools backs the agent-facing Feishu tools (`multica lark ...`).
+	// Nil when the Lark integration is not configured.
+	LarkTools *lark.Tools
 	// Composio integration (MUL-3720). Nil when COMPOSIO_API_KEY is unset;
 	// the composio HTTP handlers return 403 in that case. Wired in
 	// cmd/server/router.go after handler.New.

@@ -437,24 +437,11 @@ func (c *httpAPIClient) SendMarkdownCard(ctx context.Context, p SendMarkdownCard
 	if p.Markdown == "" {
 		return "", errors.New("lark http client: missing markdown body")
 	}
-	card := map[string]any{
-		"schema": "2.0",
-		"body": map[string]any{
-			"elements": []any{
-				map[string]any{"tag": "markdown", "content": p.Markdown},
-			},
-		},
-	}
-	if p.Summary != "" {
-		card["config"] = map[string]any{
-			"summary": map[string]any{"content": p.Summary},
-		}
-	}
-	cardBytes, err := json.Marshal(card)
+	cardJSON, err := markdownCardJSON(p.Markdown, p.Summary)
 	if err != nil {
 		return "", fmt.Errorf("lark http client: encode markdown card: %w", err)
 	}
-	path, body := outboundMessageRequest(p.ChatID, "interactive", string(cardBytes), p.ReplyTarget)
+	path, body := outboundMessageRequest(p.ChatID, "interactive", cardJSON, p.ReplyTarget)
 	var resp struct {
 		Code int    `json:"code"`
 		Msg  string `json:"msg"`
@@ -472,6 +459,29 @@ func (c *httpAPIClient) SendMarkdownCard(ctx context.Context, p SendMarkdownCard
 		return "", &APIError{Op: "send markdown card", Code: resp.Code, Msg: resp.Msg}
 	}
 	return resp.Data.MessageID, nil
+}
+
+// markdownCardJSON renders the schema-2.0 card with a single markdown
+// element that SendMarkdownCard and the agent tools post.
+func markdownCardJSON(markdown, summary string) (string, error) {
+	card := map[string]any{
+		"schema": "2.0",
+		"body": map[string]any{
+			"elements": []any{
+				map[string]any{"tag": "markdown", "content": markdown},
+			},
+		},
+	}
+	if summary != "" {
+		card["config"] = map[string]any{
+			"summary": map[string]any{"content": summary},
+		}
+	}
+	cardBytes, err := json.Marshal(card)
+	if err != nil {
+		return "", err
+	}
+	return string(cardBytes), nil
 }
 
 // PatchInteractiveCard updates an existing card's body. Lark's

@@ -617,6 +617,21 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				patcher := lark.NewPatcher(cs, installSvc, larkClient, lark.PatcherConfig{})
 				patcher.Register(bus)
 
+				// Agent-facing Feishu tools + the scheduler that sends their
+				// delayed messages, and delivery of files an agent attaches to
+				// a chat reply. Both need the upload-capable client.
+				if toolClient, ok := larkClient.(lark.ToolAPIClient); ok {
+					larkTools := lark.NewTools(queries, installSvc, toolClient, slog.Default())
+					h.LarkTools = larkTools
+					go larkTools.RunScheduler(context.Background())
+					if store != nil {
+						patcher.SetReplyAttachments(lark.ReplyAttachmentDeps{
+							Queries: queries, Storage: store, Client: toolClient,
+						})
+						h.DeclareChannelFileDelivery(string(channel.TypeFeishu))
+					}
+				}
+
 				// Typing indicator: shows a "processing" reaction on the user's
 				// message while the agent is working, then removes it before the
 				// reply is sent. Best-effort; failures are logged only.
@@ -2410,6 +2425,18 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// thread (?id for a specific one, else the thread the session is in).
 			r.Get("/api/chat/history", h.GetChatChannelHistory)
 			r.Get("/api/chat/thread", h.GetChatThread)
+
+			// Agent-facing Feishu tools (`multica lark ...`): task-token only,
+			// acting through the calling agent's own Feishu bot.
+			r.Get("/api/lark/context", h.GetLarkContext)
+			r.Post("/api/lark/send", h.SendLarkMessage)
+			r.Get("/api/lark/scheduled", h.ListLarkScheduled)
+			r.Delete("/api/lark/scheduled/{id}", h.CancelLarkScheduled)
+			r.Get("/api/lark/doc", h.ReadLarkDoc)
+			r.Get("/api/lark/chats", h.ListLarkChats)
+			r.Get("/api/lark/members", h.ListLarkChatMembers)
+			r.Post("/api/lark/groups", h.CreateLarkGroup)
+			r.Post("/api/lark/groups/members", h.AddLarkGroupMembers)
 
 			// Inbox
 			r.Route("/api/inbox", func(r chi.Router) {
