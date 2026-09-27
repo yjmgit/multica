@@ -335,6 +335,37 @@ describe("LarkAgentBindButton (CTA gate)", () => {
     expect(link.rel).toContain("noopener");
   });
 
+  it("re-runs the device flow in update mode to grant a connected bot more permissions", async () => {
+    const user = userEvent.setup();
+    installationsRef.current.installations = [
+      {
+        id: "inst-1",
+        workspace_id: "ws-1",
+        agent_id: "agent-1",
+        app_id: "cli_existing_app",
+        bot_open_id: "ou_existing_bot",
+        installer_user_id: "user-1",
+        status: "active",
+        installed_at: "2026-06-03T00:00:00Z",
+        created_at: "2026-06-03T00:00:00Z",
+        updated_at: "2026-06-03T00:00:00Z",
+      },
+    ];
+    mockBeginInstall.mockResolvedValue({
+      session_id: "sess-update",
+      qr_code_url: "https://accounts.feishu.cn/oauth/v1/device?u=update",
+      expires_in_seconds: 300,
+      poll_interval_seconds: 2,
+    });
+    mockGetStatus.mockResolvedValue({ status: "pending" });
+    render(<LarkAgentBindButton agentId="agent-1" agentName="Bot" />, { wrapper: I18nWrapper });
+    await user.click(screen.getByTestId("lark-agent-bot-update-scopes"));
+    await waitFor(() => {
+      expect(mockBeginInstall).toHaveBeenCalledWith("workspace-1", "agent-1", "feishu", "update");
+    });
+    expect(screen.getByText("Update bot permissions")).toBeTruthy();
+  });
+
   it("renders region-aware badge text and Manage link for a Lark-international (region=lark) installation", () => {
     // Dual-region: a bot installed against the Lark international cloud
     // must show "Connected to Lark" + "Manage in Lark" copy, with the

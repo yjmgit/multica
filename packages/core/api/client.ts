@@ -4789,6 +4789,7 @@ export class ApiClient {
     workspaceId: string,
     agentId: string,
     region: "feishu" | "lark",
+    mode?: "update",
   ): Promise<BeginLarkInstallResponse> {
     // The user picks the cloud explicitly in the UI ("Bind to Feishu"
     // vs "Bind to Lark"), and the backend POSTs the device-flow `begin`
@@ -4798,7 +4799,10 @@ export class ApiClient {
     // server-side (RegionOrDefault) — we surface region as a required
     // arg here so every call site is forced to make a deliberate
     // choice rather than silently defaulting to mainland.
+    // mode="update" re-runs the flow against the agent's existing bot to
+    // grant the extra permissions the Feishu tools need.
     const search = new URLSearchParams({ agent_id: agentId, region });
+    if (mode) search.set("mode", mode);
     return this.fetch(`/api/workspaces/${workspaceId}/lark/install/begin?${search.toString()}`, {
       method: "POST",
     });

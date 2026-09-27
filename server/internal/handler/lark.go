@@ -340,12 +340,26 @@ func (h *Handler) BeginLarkInstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// mode=update re-runs the device flow against the agent's existing bot
+	// so the user can grant the extra permissions the Feishu tools need;
+	// the default creates a new bot.
+	modeParam := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("mode")))
+	if modeParam != "" && modeParam != "update" {
+		writeError(w, http.StatusBadRequest, "mode must be empty or 'update'")
+		return
+	}
+
 	res, err := h.LarkRegistration.BeginInstall(r.Context(), lark.BeginInstallParams{
-		WorkspaceID: wsUUID,
-		AgentID:     agentUUID,
-		InitiatorID: initiatorUUID,
-		Region:      lark.Region(regionParam),
+		WorkspaceID:  wsUUID,
+		AgentID:      agentUUID,
+		InitiatorID:  initiatorUUID,
+		Region:       lark.Region(regionParam),
+		UpdateScopes: modeParam == "update",
 	})
+	if errors.Is(err, lark.ErrNoInstallationToUpdate) || errors.Is(err, lark.ErrNoExtraScopes) {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "failed to start install: "+err.Error())
 		return

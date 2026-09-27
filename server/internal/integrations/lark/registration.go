@@ -1,7 +1,10 @@
 package lark
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -117,6 +120,50 @@ type RegistrationConfig struct {
 
 	// Now is overridable for deterministic expiry-bound tests.
 	Now func() time.Time
+
+	// ExtraScopes are app-identity permission scopes requested on top of
+	// Lark's PersonalAgent template. They ride on the QR URL as the
+	// device-flow `addons` payload, so Lark's confirmation page shows them
+	// pre-checked when a bot is created — and when an existing bot runs the
+	// update flow (BeginOptions.AppID). Empty requests nothing extra.
+	ExtraScopes []string
+}
+
+// DefaultExtraScopes are the scopes the agent-facing Feishu tools
+// (`multica lark ...`) and sender labels need beyond the PersonalAgent
+// template: messages and files, group chats, contact names, and reading /
+// writing docs, sheets, bases and wiki pages.
+var DefaultExtraScopes = []string{
+	"im:message:send_as_bot",
+	"im:resource",
+	"im:chat",
+	"contact:user.base:readonly",
+	"docx:document",
+	"docs:doc:readonly",
+	"sheets:spreadsheet:readonly",
+	"bitable:app:readonly",
+	"wiki:wiki:readonly",
+	"drive:drive",
+}
+
+// ParseExtraScopes reads the MULTICA_LARK_EXTRA_SCOPES setting: unset uses
+// DefaultExtraScopes, "none" requests nothing extra, anything else is a
+// comma-separated scope list.
+func ParseExtraScopes(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	switch strings.ToLower(raw) {
+	case "":
+		return append([]string(nil), DefaultExtraScopes...)
+	case "none":
+		return nil
+	}
+	var out []string
+	for _, s := range strings.Split(raw, ",") {
+		if s = strings.TrimSpace(s); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 func (c RegistrationConfig) withDefaults() RegistrationConfig {
@@ -251,6 +298,22 @@ func (e *RegistrationError) Error() string {
 // still change it on the form), and it rides on the QR URL — not the
 // begin POST body, which has no name field. Empty omits the pre-fill.
 func (c *RegistrationClient) Begin(ctx context.Context, namePreset string, region Region) (*BeginResult, error) {
+	return c.BeginWith(ctx, BeginOptions{NamePreset: namePreset, Region: region})
+}
+
+// BeginOptions configures one device-flow session.
+type BeginOptions struct {
+	NamePreset string
+	Region     Region
+	// AppID, when set, opens Lark's "update an existing app" flow for that
+	// app instead of creating a new one: the user confirms the extra
+	// scopes and Lark re-issues the app's credentials.
+	AppID string
+}
+
+// BeginWith is Begin with the full option set.
+func (c *RegistrationClient) BeginWith(ctx context.Context, opts BeginOptions) (*BeginResult, error) {
+	namePreset, region := opts.NamePreset, opts.Region
 	// Pick the begin domain off the requested region. Empty / unknown
 	// regions degrade to Feishu (mainland) — same back-compat invariant
 	// as RegionOrDefault, so callers that pre-date this signature
@@ -295,6 +358,9 @@ func (c *RegistrationClient) Begin(ctx context.Context, namePreset string, regio
 		return nil, &RegistrationError{Code: "invalid_response", Description: "verification_uri_complete is empty"}
 	}
 	qr, err := decorateQRCodeURL(resp.VerificationURIComplete, c.cfg.Source, namePreset)
+	if err == nil {
+		qr, err = addQRCodeAddons(qr, c.cfg.ExtraScopes, opts.AppID)
+	}
 	if err != nil {
 		return nil, &RegistrationError{Code: "invalid_response", Description: "verification_uri_complete is not a URL: " + err.Error()}
 	}
@@ -484,6 +550,43 @@ func decorateQRCodeURL(raw, source, namePreset string) (string, error) {
 	q.Set("source", "go-sdk/"+source)
 	if namePreset != "" {
 		q.Set("name", namePreset)
+	}
+	u.RawQuery = q.Encode()
+	return u.String(), nil
+}
+
+// addQRCodeAddons requests extra app-identity scopes and, for the update
+// flow, names the existing app. It mirrors the upstream SDK's
+// Options.Addons / Options.AppID: the scopes travel as the `addons` query
+// param (JSON {"scopes":{"tenant":[...]}}, gzipped, base64url without
+// padding) and the app as `clientID`. Lark pre-checks the scopes on its
+// confirmation page; they are additive to the PersonalAgent template.
+func addQRCodeAddons(raw string, scopes []string, appID string) (string, error) {
+	if len(scopes) == 0 && appID == "" {
+		return raw, nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", err
+	}
+	q := u.Query()
+	if len(scopes) > 0 {
+		payload, err := json.Marshal(map[string]any{"scopes": map[string][]string{"tenant": scopes}})
+		if err != nil {
+			return "", err
+		}
+		var buf bytes.Buffer
+		zw := gzip.NewWriter(&buf)
+		if _, err := zw.Write(payload); err != nil {
+			return "", err
+		}
+		if err := zw.Close(); err != nil {
+			return "", err
+		}
+		q.Set("addons", base64.RawURLEncoding.EncodeToString(buf.Bytes()))
+	}
+	if appID != "" {
+		q.Set("clientID", appID)
 	}
 	u.RawQuery = q.Encode()
 	return u.String(), nil

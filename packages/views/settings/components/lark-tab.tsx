@@ -531,6 +531,7 @@ function LarkAgentBotConnectedBadge({
 
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
+  const [updateOpen, setUpdateOpen] = useState(false);
 
   async function handleDisconnect() {
     if (disconnecting) return;
@@ -597,6 +598,7 @@ function LarkAgentBotConnectedBadge({
           app page. Demoted below the status row so it no longer competes
           with the primary connect/disconnect intents. Region-aware tooltip
           keeps the Feishu vs Lark distinction this branch introduced. */}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
       <a
         href={manageHref}
         target="_blank"
@@ -613,6 +615,26 @@ function LarkAgentBotConnectedBadge({
           ? t(($) => $.lark.agent_bot_manage_link_lark)
           : t(($) => $.lark.agent_bot_manage_link_feishu)}
       </a>
+      <button
+        type="button"
+        onClick={() => setUpdateOpen(true)}
+        className="inline-flex items-center gap-1 text-caption text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline"
+        title={t(($) => $.lark.update_scopes_tooltip)}
+        data-testid="lark-agent-bot-update-scopes"
+      >
+        <RefreshCw className="h-3 w-3" />
+        {t(($) => $.lark.update_scopes_button)}
+      </button>
+      </div>
+      {updateOpen && (
+        <LarkInstallDialog
+          wsId={wsId}
+          agentId={installation.agent_id}
+          region={installation.region === "lark" ? "lark" : "feishu"}
+          mode="update"
+          onClose={() => setUpdateOpen(false)}
+        />
+      )}
 
       {/* Row 3: the check a silent Bot almost always needs (#8496). An app
           whose events go to a request URL instead of the long connection
@@ -685,12 +707,16 @@ function LarkInstallDialog({
   agentId,
   agentName,
   region,
+  mode,
   onClose,
 }: {
   wsId: string;
   agentId: string;
   agentName?: string;
   region: "feishu" | "lark";
+  /** "update" grants the existing bot the extra permissions instead of
+   * creating a new bot. */
+  mode?: "update";
   onClose: () => void;
 }) {
   const { t } = useT("settings");
@@ -724,7 +750,9 @@ function LarkInstallDialog({
     setErrorMessage(null);
     setSession(null);
     try {
-      const res = await api.beginLarkInstall(wsId, agentId, region);
+      const res = mode
+        ? await api.beginLarkInstall(wsId, agentId, region, mode)
+        : await api.beginLarkInstall(wsId, agentId, region);
       if (closedRef.current) return;
       setSession({
         sessionId: res.session_id,
@@ -782,9 +810,11 @@ function LarkInstallDialog({
         if (res.status === "success") {
           await qc.invalidateQueries({ queryKey: larkKeys.installations(wsId) });
           toast.success(
-            region === "lark"
-              ? t(($) => $.lark.install_success_toast_lark)
-              : t(($) => $.lark.install_success_toast_feishu),
+            mode === "update"
+              ? t(($) => $.lark.update_scopes_success_toast)
+              : region === "lark"
+                ? t(($) => $.lark.install_success_toast_lark)
+                : t(($) => $.lark.install_success_toast_feishu),
           );
           // Close after a tiny beat so the user sees the success state
           // briefly before the dialog disappears.
@@ -857,12 +887,16 @@ function LarkInstallDialog({
       <DialogContent className="max-w-sm">
         <DialogHeader>
           <DialogTitle>
-            {region === "lark"
-              ? t(($) => $.lark.install_dialog_title_lark)
-              : t(($) => $.lark.install_dialog_title_feishu)}
+            {mode === "update"
+              ? t(($) => $.lark.update_scopes_title)
+              : region === "lark"
+                ? t(($) => $.lark.install_dialog_title_lark)
+                : t(($) => $.lark.install_dialog_title_feishu)}
           </DialogTitle>
           <DialogDescription>
-            {region === "lark"
+            {mode === "update"
+              ? t(($) => $.lark.update_scopes_description)
+              : region === "lark"
               ? agentName
                 ? t(($) => $.lark.install_dialog_description_for_agent_lark, { agent: agentName })
                 : t(($) => $.lark.install_dialog_description_lark)

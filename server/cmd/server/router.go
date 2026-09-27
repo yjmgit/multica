@@ -735,6 +735,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				regCfg := lark.RegistrationConfig{
 					Domain:     strings.TrimSpace(os.Getenv("MULTICA_LARK_REGISTRATION_DOMAIN")),
 					LarkDomain: strings.TrimSpace(os.Getenv("MULTICA_LARK_REGISTRATION_LARK_DOMAIN")),
+					// Permissions the Feishu tools need, pre-checked on Lark's
+					// install / update confirmation page. Unset uses the
+					// defaults; "none" turns the request off.
+					ExtraScopes: lark.ParseExtraScopes(os.Getenv("MULTICA_LARK_EXTRA_SCOPES")),
 				}
 				regClient := lark.NewRegistrationClient(regCfg)
 				regSvc, rerr := lark.NewRegistrationService(

@@ -1,11 +1,17 @@
 package lark
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -672,3 +678,82 @@ func TestRegistrationClient_Poll_MissingDeviceCode(t *testing.T) {
 // errorsAs is a tiny wrapper over errors.As so the test source stays
 // terse — call sites read `errorsAs(err, &re)`.
 func errorsAs(err error, target any) bool { return errors.As(err, target) }
+
+// decodeAddons reverses the device-flow addons encoding (base64url, gzip,
+// JSON) the upstream SDK uses.
+func decodeAddons(t *testing.T, raw string) map[string]any {
+	t.Helper()
+	gz, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil {
+		t.Fatalf("base64: %v", err)
+	}
+	zr, err := gzip.NewReader(bytes.NewReader(gz))
+	if err != nil {
+		t.Fatalf("gzip: %v", err)
+	}
+	body, err := io.ReadAll(zr)
+	if err != nil {
+		t.Fatalf("gunzip: %v", err)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatalf("json %q: %v", body, err)
+	}
+	return out
+}
+
+// Extra scopes ride on the QR URL so Lark pre-checks them; the update flow
+// also names the existing app.
+func TestRegistrationClient_BeginWith_AddonsAndUpdateFlow(t *testing.T) {
+	fake := newRegistrationFake(t)
+	fake.stubBegin(map[string]any{
+		"device_code":               "dc_xyz",
+		"verification_uri_complete": "https://accounts.feishu.cn/oauth/v1/qrcode?code=abc",
+		"interval":                  3,
+		"expire_in":                 600,
+	})
+	c := NewRegistrationClient(RegistrationConfig{Domain: fake.URL(), ExtraScopes: []string{"im:resource", "docx:document"}})
+
+	res, err := c.BeginWith(context.Background(), BeginOptions{AppID: "cli_existing"})
+	if err != nil {
+		t.Fatalf("BeginWith: %v", err)
+	}
+	u, err := url.Parse(res.QRCodeURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := u.Query()
+	if q.Get("code") != "abc" || q.Get("from") != "sdk" {
+		t.Fatalf("original QR params lost: %s", res.QRCodeURL)
+	}
+	if q.Get("clientID") != "cli_existing" {
+		t.Fatalf("clientID = %q", q.Get("clientID"))
+	}
+	got := decodeAddons(t, q.Get("addons"))
+	want := map[string]any{"scopes": map[string]any{"tenant": []any{"im:resource", "docx:document"}}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("addons = %v, want %v", got, want)
+	}
+
+	// Without extra scopes and without an app, the QR URL is unchanged.
+	plain := NewRegistrationClient(RegistrationConfig{Domain: fake.URL()})
+	res, err = plain.Begin(context.Background(), "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(res.QRCodeURL, "addons=") || strings.Contains(res.QRCodeURL, "clientID=") {
+		t.Fatalf("unexpected addons on plain begin: %s", res.QRCodeURL)
+	}
+}
+
+func TestParseExtraScopes(t *testing.T) {
+	if got := ParseExtraScopes(""); !reflect.DeepEqual(got, DefaultExtraScopes) {
+		t.Fatalf("unset = %v", got)
+	}
+	if got := ParseExtraScopes(" none "); got != nil {
+		t.Fatalf("none = %v", got)
+	}
+	if got := ParseExtraScopes("im:resource, docx:document ,"); !reflect.DeepEqual(got, []string{"im:resource", "docx:document"}) {
+		t.Fatalf("list = %v", got)
+	}
+}

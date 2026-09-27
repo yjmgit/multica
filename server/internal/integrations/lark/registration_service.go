@@ -394,7 +394,20 @@ type BeginInstallParams struct {
 	// Feishu, matching RegionOrDefault, so existing callers without
 	// the new field keep working.
 	Region Region
+	// UpdateScopes opens Lark's update flow for the agent's EXISTING bot
+	// instead of creating a new one: the user confirms the extra scopes
+	// (RegistrationConfig.ExtraScopes) and the installation is refreshed
+	// with the re-issued credentials. Region comes from the installation.
+	UpdateScopes bool
 }
+
+// ErrNoInstallationToUpdate: UpdateScopes was requested for an agent with
+// no active bot.
+var ErrNoInstallationToUpdate = errors.New("lark registration: this agent has no connected bot to update")
+
+// ErrNoExtraScopes: UpdateScopes was requested but the server requests no
+// extra scopes (MULTICA_LARK_EXTRA_SCOPES=none), so there is nothing to add.
+var ErrNoExtraScopes = errors.New("lark registration: no extra permissions are configured on this server")
 
 // BeginInstallResult is the public payload the handler echoes to the
 // frontend. The session_id is the opaque handle the frontend uses to
@@ -442,8 +455,20 @@ func (s *RegistrationService) BeginInstall(ctx context.Context, p BeginInstallPa
 	// from the handler AND means a pre-region caller (omitting the
 	// field) keeps getting the historical mainland-first behaviour.
 	region := RegionOrDefault(string(p.Region))
+	opts := BeginOptions{NamePreset: botNamePreset(agent.Name), Region: region}
+	if p.UpdateScopes {
+		if len(s.client.cfg.ExtraScopes) == 0 {
+			return BeginInstallResult{}, ErrNoExtraScopes
+		}
+		inst, err := s.agentInstallation(ctx, p.WorkspaceID, p.AgentID)
+		if err != nil {
+			return BeginInstallResult{}, err
+		}
+		region = RegionOrDefault(inst.Region)
+		opts = BeginOptions{Region: region, AppID: inst.AppID}
+	}
 
-	begin, err := s.client.Begin(ctx, botNamePreset(agent.Name), region)
+	begin, err := s.client.BeginWith(ctx, opts)
 	if err != nil {
 		return BeginInstallResult{}, fmt.Errorf("lark registration: begin: %w", err)
 	}
@@ -504,6 +529,20 @@ func (s *RegistrationService) BeginInstall(ctx context.Context, p BeginInstallPa
 		ExpiresInSeconds:    int(begin.ExpiresIn / time.Second),
 		PollIntervalSeconds: int(begin.Interval / time.Second),
 	}, nil
+}
+
+// agentInstallation finds the agent's active bot for the update flow.
+func (s *RegistrationService) agentInstallation(ctx context.Context, workspaceID, agentID pgtype.UUID) (Installation, error) {
+	insts, err := s.installs.ListByWorkspace(ctx, workspaceID)
+	if err != nil {
+		return Installation{}, fmt.Errorf("lark registration: list installations: %w", err)
+	}
+	for _, inst := range insts {
+		if inst.AgentID == agentID && InstallationStatus(inst.Status) == InstallationActive && inst.AppID != "" {
+			return inst, nil
+		}
+	}
+	return Installation{}, ErrNoInstallationToUpdate
 }
 
 // GetSession returns the current state of an in-flight or recently-
