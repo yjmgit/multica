@@ -275,7 +275,7 @@ func (e *inboundEnricher) Enrich(ctx context.Context, msg InboundMessage, creds 
 const senderNameCacheTTL = 30 * time.Minute
 
 // labelSender prefixes body with the sender's display name, e.g.
-// "[Alice]: hi". When the name cannot be resolved (the app lacks the
+// "[Alice]: hi" ("[Alice]:" on its own line before a slash command). When the name cannot be resolved (the app lacks the
 // Contact scope, or the lookup failed) it falls back to the open_id so
 // different people stay distinguishable. An empty body or unknown sender
 // passes through.
@@ -293,6 +293,12 @@ func (e *inboundEnricher) labelSender(ctx context.Context, creds InstallationCre
 	}
 	if name == "" {
 		name = "Feishu user " + openID
+	}
+	// A slash command must stay at the start of its own line: /issue finds
+	// its directive line in the body to cut the description (and keep media
+	// placeholders in place), so a label prefix on that line would break it.
+	if strings.HasPrefix(strings.TrimSpace(body), "/") {
+		return fmt.Sprintf("[%s]:\n%s", name, body)
 	}
 	return fmt.Sprintf("[%s]: %s", name, body)
 }

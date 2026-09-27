@@ -581,3 +581,16 @@ func TestEnrichLabelsSenderByOpenIDWhenNameUnavailable(t *testing.T) {
 		t.Fatalf("command body must stay the user's own text, got %q", out.CommandBody)
 	}
 }
+
+// The label must not share a line with a slash command, or /issue cannot find
+// its directive line in the body.
+func TestEnrichLabelsSlashCommandOnItsOwnLine(t *testing.T) {
+	t.Parallel()
+	fake := newEnricherFake()
+	fake.userNames = map[string]string{"ou_wang": "王五"}
+	in := InboundMessage{MessageType: "text", MessageID: "om_1", ChatID: "oc_p2p", ChatType: ChatTypeP2P, SenderOpenID: "ou_wang", Body: "/issue 登录页报错\n复现步骤见截图", CommandBody: "/issue 登录页报错\n复现步骤见截图"}
+	out := enrich(t, fake, in, InboundEnricherConfig{})
+	if out.Body != "[王五]:\n/issue 登录页报错\n复现步骤见截图" {
+		t.Fatalf("body = %q", out.Body)
+	}
+}

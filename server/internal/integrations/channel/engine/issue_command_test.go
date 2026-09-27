@@ -76,3 +76,18 @@ func TestIssueDescriptionFromCommandBodyFallsBackWithoutDirective(t *testing.T) 
 		t.Fatalf("description = %q, want parsed fallback", got)
 	}
 }
+
+// Channel adapters label the sender on its own line before a command; the
+// description is still cut from the body after the directive line.
+func TestIssueDescriptionFromLabeledBody(t *testing.T) {
+	body := "[王五]:\n/issue 登录页报错\n复现步骤 [image: a.png]"
+	got := issueDescriptionFromCommandBody(body, "/issue 登录页报错\n复现步骤", "fallback")
+	if got != "复现步骤 [image: a.png]" {
+		t.Fatalf("description = %q", got)
+	}
+	// A label on the directive line hides it, losing the media placeholder.
+	inline := "[王五]: /issue 登录页报错\n复现步骤 [image: a.png]"
+	if got := issueDescriptionFromCommandBody(inline, "/issue 登录页报错\n复现步骤", "fallback"); got != "fallback" {
+		t.Fatalf("inline label description = %q, want the fallback", got)
+	}
+}
