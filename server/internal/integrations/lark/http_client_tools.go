@@ -45,6 +45,25 @@ type ToolAPIClient interface {
 	ListSheets(ctx context.Context, creds InstallationCredentials, spreadsheetToken string) ([]SheetInfo, error)
 	// GetSheetValues returns one sheet's cell values rendered as strings.
 	GetSheetValues(ctx context.Context, creds InstallationCredentials, spreadsheetToken, sheetID string) ([][]string, error)
+	// GetLegacyDocRawContent returns the plain-text body of a legacy (doc v2)
+	// document.
+	GetLegacyDocRawContent(ctx context.Context, creds InstallationCredentials, docToken string) (string, error)
+	// ListBitableTables lists a base's tables.
+	ListBitableTables(ctx context.Context, creds InstallationCredentials, appToken string) ([]BitableTable, error)
+	// ListBitableFields lists a table's field names in display order.
+	ListBitableFields(ctx context.Context, creds InstallationCredentials, appToken, tableID string) ([]string, error)
+	// ListBitableRecords lists one page of a table's records.
+	ListBitableRecords(ctx context.Context, creds InstallationCredentials, appToken, tableID, pageToken string) ([]map[string]any, string, error)
+	// CreateDocFromMarkdown creates a docx document owned by the app and
+	// fills it with markdown converted to document blocks. It returns the
+	// document id.
+	CreateDocFromMarkdown(ctx context.Context, creds InstallationCredentials, title, markdown string) (string, error)
+	// ShareDoc grants each open_id perm ("view", "edit" or "full_access") on a
+	// docx document and, when linkShare is non-empty, sets its link sharing
+	// (e.g. "tenant_readable").
+	ShareDoc(ctx context.Context, creds InstallationCredentials, documentID string, openIDs []string, perm, linkShare string) error
+	// DocURL returns the browser URL of a docx document.
+	DocURL(ctx context.Context, creds InstallationCredentials, documentID string) (string, error)
 	// ListChatMembers lists one page of a chat's human members.
 	ListChatMembers(ctx context.Context, creds InstallationCredentials, chatID, pageToken string) ([]ChatMember, string, error)
 }
@@ -89,6 +108,12 @@ type ChatInfo struct {
 type SheetInfo struct {
 	SheetID string `json:"sheet_id"`
 	Title   string `json:"title"`
+}
+
+// BitableTable is one table of a base (多维表格).
+type BitableTable struct {
+	TableID string `json:"table_id"`
+	Name    string `json:"name"`
 }
 
 // ChatMember is one human member of a chat.
@@ -436,6 +461,135 @@ func (c *httpAPIClient) GetSheetValues(ctx context.Context, creds InstallationCr
 	return rows, nil
 }
 
+func (c *httpAPIClient) GetLegacyDocRawContent(ctx context.Context, creds InstallationCredentials, docToken string) (string, error) {
+	if docToken == "" {
+		return "", errors.New("lark http client: missing doc token")
+	}
+	var resp struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+		Data struct {
+			Content string `json:"content"`
+		} `json:"data"`
+	}
+	path := "/open-apis/doc/v2/" + url.PathEscape(docToken) + "/raw_content"
+	if err := c.doAuthedJSON(ctx, creds, http.MethodGet, path, nil, &resp); err != nil {
+		return "", fmt.Errorf("lark http client: read legacy document: %w", err)
+	}
+	if resp.Code != 0 {
+		return "", &APIError{Op: "read legacy document", Code: resp.Code, Msg: resp.Msg}
+	}
+	return resp.Data.Content, nil
+}
+
+func (c *httpAPIClient) ListBitableTables(ctx context.Context, creds InstallationCredentials, appToken string) ([]BitableTable, error) {
+	if appToken == "" {
+		return nil, errors.New("lark http client: missing base token")
+	}
+	var out []BitableTable
+	pageToken := ""
+	for {
+		var resp struct {
+			Code int    `json:"code"`
+			Msg  string `json:"msg"`
+			Data struct {
+				Items     []BitableTable `json:"items"`
+				HasMore   bool           `json:"has_more"`
+				PageToken string         `json:"page_token"`
+			} `json:"data"`
+		}
+		q := url.Values{}
+		q.Set("page_size", "100")
+		if pageToken != "" {
+			q.Set("page_token", pageToken)
+		}
+		path := "/open-apis/bitable/v1/apps/" + url.PathEscape(appToken) + "/tables?" + q.Encode()
+		if err := c.doAuthedJSON(ctx, creds, http.MethodGet, path, nil, &resp); err != nil {
+			return nil, fmt.Errorf("lark http client: list base tables: %w", err)
+		}
+		if resp.Code != 0 {
+			return nil, &APIError{Op: "list base tables", Code: resp.Code, Msg: resp.Msg}
+		}
+		out = append(out, resp.Data.Items...)
+		if !resp.Data.HasMore || resp.Data.PageToken == "" || len(out) >= 100 {
+			return out, nil
+		}
+		pageToken = resp.Data.PageToken
+	}
+}
+
+func (c *httpAPIClient) ListBitableFields(ctx context.Context, creds InstallationCredentials, appToken, tableID string) ([]string, error) {
+	var out []string
+	pageToken := ""
+	for {
+		var resp struct {
+			Code int    `json:"code"`
+			Msg  string `json:"msg"`
+			Data struct {
+				Items []struct {
+					FieldName string `json:"field_name"`
+				} `json:"items"`
+				HasMore   bool   `json:"has_more"`
+				PageToken string `json:"page_token"`
+			} `json:"data"`
+		}
+		q := url.Values{}
+		q.Set("page_size", "100")
+		if pageToken != "" {
+			q.Set("page_token", pageToken)
+		}
+		path := "/open-apis/bitable/v1/apps/" + url.PathEscape(appToken) + "/tables/" + url.PathEscape(tableID) + "/fields?" + q.Encode()
+		if err := c.doAuthedJSON(ctx, creds, http.MethodGet, path, nil, &resp); err != nil {
+			return nil, fmt.Errorf("lark http client: list base fields: %w", err)
+		}
+		if resp.Code != 0 {
+			return nil, &APIError{Op: "list base fields", Code: resp.Code, Msg: resp.Msg}
+		}
+		for _, it := range resp.Data.Items {
+			out = append(out, it.FieldName)
+		}
+		if !resp.Data.HasMore || resp.Data.PageToken == "" || len(out) >= 500 {
+			return out, nil
+		}
+		pageToken = resp.Data.PageToken
+	}
+}
+
+func (c *httpAPIClient) ListBitableRecords(ctx context.Context, creds InstallationCredentials, appToken, tableID, pageToken string) ([]map[string]any, string, error) {
+	var resp struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+		Data struct {
+			Items []struct {
+				Fields map[string]any `json:"fields"`
+			} `json:"items"`
+			HasMore   bool   `json:"has_more"`
+			PageToken string `json:"page_token"`
+		} `json:"data"`
+	}
+	q := url.Values{}
+	q.Set("page_size", "500")
+	if pageToken != "" {
+		q.Set("page_token", pageToken)
+	}
+	path := "/open-apis/bitable/v1/apps/" + url.PathEscape(appToken) + "/tables/" + url.PathEscape(tableID) + "/records?" + q.Encode()
+	if err := c.doAuthedJSON(ctx, creds, http.MethodGet, path, nil, &resp); err != nil {
+		return nil, "", fmt.Errorf("lark http client: list base records: %w", err)
+	}
+	if resp.Code != 0 {
+		return nil, "", &APIError{Op: "list base records", Code: resp.Code, Msg: resp.Msg}
+	}
+	records := make([]map[string]any, 0, len(resp.Data.Items))
+	for _, it := range resp.Data.Items {
+		records = append(records, it.Fields)
+	}
+	next := ""
+	if resp.Data.HasMore {
+		next = resp.Data.PageToken
+	}
+	return records, next, nil
+}
+
 // sheetCellString renders one cell. ToString rendering makes most cells
 // strings already; rich cells (links, mentions) arrive as objects or arrays.
 func sheetCellString(v any) string {
@@ -449,21 +603,215 @@ func sheetCellString(v any) string {
 	case bool:
 		return strconv.FormatBool(x)
 	case []any:
+		// Rich-text segments concatenate; lists of people, options or
+		// attachments are separate values.
+		sep := ""
+		if len(x) > 1 {
+			if m, ok := x[0].(map[string]any); !ok || m["type"] != "text" {
+				sep = ", "
+			}
+		}
 		parts := make([]string, 0, len(x))
 		for _, p := range x {
 			parts = append(parts, sheetCellString(p))
 		}
-		return strings.Join(parts, "")
+		return strings.Join(parts, sep)
 	case map[string]any:
-		if s, ok := x["text"].(string); ok {
-			return s
+		for _, key := range []string{"text", "name", "link", "en_name", "email"} {
+			if s, ok := x[key].(string); ok && s != "" {
+				return s
+			}
 		}
-		if s, ok := x["link"].(string); ok {
-			return s
+		if v, ok := x["value"]; ok {
+			return sheetCellString(v)
 		}
 	}
 	raw, _ := json.Marshal(v)
 	return string(raw)
+}
+
+// maxDescendantsPerInsert stays under Lark's 1000-block cap for one
+// create-descendant call.
+const maxDescendantsPerInsert = 900
+
+// docxImageBlockType is the image block. Converted markdown images need a
+// separate upload step, so they are dropped rather than inserted empty.
+const docxImageBlockType = 27
+
+func (c *httpAPIClient) CreateDocFromMarkdown(ctx context.Context, creds InstallationCredentials, title, markdown string) (string, error) {
+	var created struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+		Data struct {
+			Document struct {
+				DocumentID string `json:"document_id"`
+			} `json:"document"`
+		} `json:"data"`
+	}
+	if err := c.doAuthedJSON(ctx, creds, http.MethodPost, "/open-apis/docx/v1/documents", map[string]any{"title": title}, &created); err != nil {
+		return "", fmt.Errorf("lark http client: create document: %w", err)
+	}
+	if created.Code != 0 || created.Data.Document.DocumentID == "" {
+		return "", &APIError{Op: "create document", Code: created.Code, Msg: created.Msg}
+	}
+	docID := created.Data.Document.DocumentID
+	if strings.TrimSpace(markdown) == "" {
+		return docID, nil
+	}
+
+	var converted struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+		Data struct {
+			FirstLevelBlockIDs []string         `json:"first_level_block_ids"`
+			Blocks             []map[string]any `json:"blocks"`
+		} `json:"data"`
+	}
+	body := map[string]any{"content_type": "markdown", "content": markdown}
+	if err := c.doAuthedJSON(ctx, creds, http.MethodPost, "/open-apis/docx/v1/documents/blocks/convert", body, &converted); err != nil {
+		return docID, fmt.Errorf("lark http client: convert markdown: %w", err)
+	}
+	if converted.Code != 0 {
+		return docID, &APIError{Op: "convert markdown", Code: converted.Code, Msg: converted.Msg}
+	}
+	for _, batch := range descendantBatches(converted.Data.FirstLevelBlockIDs, converted.Data.Blocks) {
+		var resp struct {
+			Code int    `json:"code"`
+			Msg  string `json:"msg"`
+		}
+		path := "/open-apis/docx/v1/documents/" + url.PathEscape(docID) + "/blocks/" + url.PathEscape(docID) + "/descendant?document_revision_id=-1"
+		insert := map[string]any{"children_id": batch.children, "index": -1, "descendants": batch.blocks}
+		if err := c.doAuthedJSON(ctx, creds, http.MethodPost, path, insert, &resp); err != nil {
+			return docID, fmt.Errorf("lark http client: insert document blocks: %w", err)
+		}
+		if resp.Code != 0 {
+			return docID, &APIError{Op: "insert document blocks", Code: resp.Code, Msg: resp.Msg}
+		}
+	}
+	return docID, nil
+}
+
+type descendantBatch struct {
+	children []string
+	blocks   []map[string]any
+}
+
+// descendantBatches groups converted blocks into create-descendant calls:
+// each batch carries whole top-level subtrees, image blocks are dropped
+// (along with references to them), and table merge_info — which the insert
+// endpoint rejects — is removed.
+func descendantBatches(firstLevel []string, blocks []map[string]any) []descendantBatch {
+	byID := make(map[string]map[string]any, len(blocks))
+	for _, b := range blocks {
+		if id, _ := b["block_id"].(string); id != "" {
+			byID[id] = b
+		}
+	}
+	isImage := func(id string) bool {
+		b := byID[id]
+		t, _ := b["block_type"].(float64)
+		return b == nil || int(t) == docxImageBlockType
+	}
+	var subtree func(id string, out *[]map[string]any)
+	subtree = func(id string, out *[]map[string]any) {
+		b := byID[id]
+		if kids, ok := b["children"].([]any); ok {
+			kept := make([]any, 0, len(kids))
+			for _, k := range kids {
+				if kid, _ := k.(string); kid != "" && !isImage(kid) {
+					kept = append(kept, kid)
+				}
+			}
+			b["children"] = kept
+		}
+		if table, ok := b["table"].(map[string]any); ok {
+			if prop, ok := table["property"].(map[string]any); ok {
+				delete(prop, "merge_info")
+			}
+		}
+		*out = append(*out, b)
+		kids, _ := b["children"].([]any)
+		for _, k := range kids {
+			subtree(k.(string), out)
+		}
+	}
+	var batches []descendantBatch
+	var cur descendantBatch
+	for _, id := range firstLevel {
+		if isImage(id) {
+			continue
+		}
+		if _, ok := byID[id]["children"].([]any); !ok {
+			byID[id]["children"] = []any{}
+		}
+		var tree []map[string]any
+		subtree(id, &tree)
+		if len(cur.children) > 0 && len(cur.blocks)+len(tree) > maxDescendantsPerInsert {
+			batches = append(batches, cur)
+			cur = descendantBatch{}
+		}
+		cur.children = append(cur.children, id)
+		cur.blocks = append(cur.blocks, tree...)
+	}
+	if len(cur.children) > 0 {
+		batches = append(batches, cur)
+	}
+	return batches
+}
+
+func (c *httpAPIClient) ShareDoc(ctx context.Context, creds InstallationCredentials, documentID string, openIDs []string, perm, linkShare string) error {
+	for _, openID := range openIDs {
+		var resp struct {
+			Code int    `json:"code"`
+			Msg  string `json:"msg"`
+		}
+		path := "/open-apis/drive/v1/permissions/" + url.PathEscape(documentID) + "/members?type=docx&need_notification=false"
+		body := map[string]any{"member_type": "openid", "member_id": openID, "perm": perm, "type": "user"}
+		if err := c.doAuthedJSON(ctx, creds, http.MethodPost, path, body, &resp); err != nil {
+			return fmt.Errorf("lark http client: share document: %w", err)
+		}
+		if resp.Code != 0 {
+			return &APIError{Op: "share document", Code: resp.Code, Msg: resp.Msg}
+		}
+	}
+	if linkShare == "" {
+		return nil
+	}
+	var resp struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+	}
+	path := "/open-apis/drive/v1/permissions/" + url.PathEscape(documentID) + "/public?type=docx"
+	if err := c.doAuthedJSON(ctx, creds, http.MethodPatch, path, map[string]any{"link_share_entity": linkShare}, &resp); err != nil {
+		return fmt.Errorf("lark http client: set document link sharing: %w", err)
+	}
+	if resp.Code != 0 {
+		return &APIError{Op: "set document link sharing", Code: resp.Code, Msg: resp.Msg}
+	}
+	return nil
+}
+
+func (c *httpAPIClient) DocURL(ctx context.Context, creds InstallationCredentials, documentID string) (string, error) {
+	var resp struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+		Data struct {
+			Metas []struct {
+				URL string `json:"url"`
+			} `json:"metas"`
+		} `json:"data"`
+	}
+	body := map[string]any{
+		"request_docs": []any{map[string]any{"doc_token": documentID, "doc_type": "docx"}},
+		"with_url":     true,
+	}
+	if err := c.doAuthedJSON(ctx, creds, http.MethodPost, "/open-apis/drive/v1/metas/batch_query", body, &resp); err != nil {
+		return "", fmt.Errorf("lark http client: document url: %w", err)
+	}
+	if resp.Code != 0 || len(resp.Data.Metas) == 0 || resp.Data.Metas[0].URL == "" {
+		return "", &APIError{Op: "document url", Code: resp.Code, Msg: resp.Msg}
+	}
+	return resp.Data.Metas[0].URL, nil
 }
 
 // doAuthedMultipart is doAuthedJSON for Lark's multipart upload endpoints,

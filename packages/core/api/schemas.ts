@@ -3595,3 +3595,20 @@ export const RuntimeProfileSchema = z
     runtime_type: profile.runtime_type || profile.protocol_family,
   }));
 export const RuntimeProfileListSchema = z.array(RuntimeProfileSchema);
+
+// A malformed row drops the whole list (an empty list is honest; a list with
+// a row the UI cannot cancel is not). Optional display fields default.
+export const LarkScheduledListSchema = z.object({
+  scheduled: z.array(z.object({
+    id: z.string(),
+    kind: z.string().catch("message"),
+    autopilot_id: z.string().optional().catch(undefined),
+    agent_id: z.string().catch(""),
+    receive_id_type: z.string().catch(""),
+    receive_id: z.string().catch(""),
+    text: z.string().catch(""),
+    mention_open_ids: z.array(z.string()).catch([]),
+    fire_at: z.string(),
+    status: z.string().catch("pending"),
+  }).loose()),
+}).loose();

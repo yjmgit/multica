@@ -99,6 +99,28 @@ func (f *handlerFakeToolClient) ListChatMembers(context.Context, lark.Installati
 	return nil, "", nil
 }
 
+func (f *handlerFakeToolClient) GetLegacyDocRawContent(context.Context, lark.InstallationCredentials, string) (string, error) {
+	return "", nil
+}
+func (f *handlerFakeToolClient) ListBitableTables(context.Context, lark.InstallationCredentials, string) ([]lark.BitableTable, error) {
+	return nil, nil
+}
+func (f *handlerFakeToolClient) ListBitableFields(context.Context, lark.InstallationCredentials, string, string) ([]string, error) {
+	return nil, nil
+}
+func (f *handlerFakeToolClient) ListBitableRecords(context.Context, lark.InstallationCredentials, string, string, string) ([]map[string]any, string, error) {
+	return nil, "", nil
+}
+func (f *handlerFakeToolClient) CreateDocFromMarkdown(context.Context, lark.InstallationCredentials, string, string) (string, error) {
+	return "doxcn", nil
+}
+func (f *handlerFakeToolClient) ShareDoc(context.Context, lark.InstallationCredentials, string, []string, string, string) error {
+	return nil
+}
+func (f *handlerFakeToolClient) DocURL(context.Context, lark.InstallationCredentials, string) (string, error) {
+	return "https://x/docx/doxcn", nil
+}
+
 type handlerPlainSecret struct{}
 
 func (handlerPlainSecret) DecryptAppSecret(lark.Installation) (string, error) { return "secret", nil }
@@ -169,5 +191,59 @@ func TestSendLarkMessageMultipart(t *testing.T) {
 	w = send(map[string]string{"chat_id": "oc_team", "delay": "1m"}, map[string]string{"a.txt": "x"})
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("scheduled file: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// Members see the workspace's pending scheduled messages; cancelling needs the
+// agent's owner or a workspace admin.
+func TestWorkspaceLarkScheduledListAndCancel(t *testing.T) {
+	agentID := dbfx.Agent(t, "Scheduled owner agent", "")
+	installationID := dbfx.Insert(t, "channel_installation", testutil.Cols{
+		"workspace_id": testWorkspaceID, "agent_id": agentID, "channel_type": "feishu",
+		"config": testutil.Raw(`'{"app_id":"cli_sched_ui"}'::jsonb`), "status": "active", "installer_user_id": testUserID,
+	})
+	scheduledID := dbfx.Insert(t, "channel_scheduled_message", testutil.Cols{
+		"workspace_id": testWorkspaceID, "installation_id": installationID, "agent_id": agentID,
+		"channel_type": "feishu", "receive_id_type": "chat_id", "receive_id": "oc_ui", "text": "关煤气",
+		"fire_at": testutil.Raw("now() + interval '1 hour'"),
+	})
+
+	w := httptest.NewRecorder()
+	testHandler.ListWorkspaceLarkScheduled(w, withURLParam(newRequest(http.MethodGet, "/", nil), "id", testWorkspaceID))
+	if w.Code != http.StatusOK {
+		t.Fatalf("list: %d %s", w.Code, w.Body.String())
+	}
+	var list struct {
+		Scheduled []lark.ScheduledMessage `json:"scheduled"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &list)
+	found := false
+	for _, s := range list.Scheduled {
+		found = found || (s.ID == scheduledID && s.Text == "关煤气" && s.Kind == "message")
+	}
+	if !found {
+		t.Fatalf("scheduled message missing from %s", w.Body.String())
+	}
+
+	// A plain member who does not own the agent cannot cancel it.
+	outsider := dbfx.User(t, "Scheduled outsider", "sched-outsider-"+scheduledID[:8]+"@multica.test")
+	dbfx.Member(t, testWorkspaceID, outsider, "member")
+	req := withURLParams(newRequest(http.MethodDelete, "/", nil), "id", testWorkspaceID, "scheduledId", scheduledID)
+	req.Header.Set("X-User-ID", outsider)
+	w = httptest.NewRecorder()
+	testHandler.CancelWorkspaceLarkScheduled(w, req)
+	if w.Code != http.StatusForbidden && w.Code != http.StatusNotFound {
+		t.Fatalf("outsider cancel: %d %s", w.Code, w.Body.String())
+	}
+
+	w = httptest.NewRecorder()
+	testHandler.CancelWorkspaceLarkScheduled(w, withURLParams(newRequest(http.MethodDelete, "/", nil), "id", testWorkspaceID, "scheduledId", scheduledID))
+	if w.Code != http.StatusOK {
+		t.Fatalf("owner cancel: %d %s", w.Code, w.Body.String())
+	}
+	w = httptest.NewRecorder()
+	testHandler.CancelWorkspaceLarkScheduled(w, withURLParams(newRequest(http.MethodDelete, "/", nil), "id", testWorkspaceID, "scheduledId", scheduledID))
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("second cancel: %d, want 404", w.Code)
 	}
 }

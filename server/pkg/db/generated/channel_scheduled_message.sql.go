@@ -15,7 +15,7 @@ const cancelChannelScheduledMessage = `-- name: CancelChannelScheduledMessage :o
 UPDATE channel_scheduled_message
 SET status = 'cancelled', updated_at = now()
 WHERE id = $1 AND workspace_id = $2 AND agent_id = $3 AND status = 'pending'
-RETURNING id, workspace_id, installation_id, agent_id, channel_type, task_id, receive_id_type, receive_id, reply_message_id, reply_in_thread, text, mention_open_ids, fire_at, status, last_error, sent_message_id, created_at, updated_at
+RETURNING id, workspace_id, installation_id, agent_id, channel_type, task_id, receive_id_type, receive_id, reply_message_id, reply_in_thread, text, mention_open_ids, fire_at, status, last_error, sent_message_id, created_at, updated_at, kind, autopilot_id, actor_user_id
 `
 
 type CancelChannelScheduledMessageParams struct {
@@ -46,6 +46,50 @@ func (q *Queries) CancelChannelScheduledMessage(ctx context.Context, arg CancelC
 		&i.SentMessageID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Kind,
+		&i.AutopilotID,
+		&i.ActorUserID,
+	)
+	return i, err
+}
+
+const cancelChannelScheduledMessageInWorkspace = `-- name: CancelChannelScheduledMessageInWorkspace :one
+UPDATE channel_scheduled_message
+SET status = 'cancelled', updated_at = now()
+WHERE id = $1 AND workspace_id = $2 AND status = 'pending'
+RETURNING id, workspace_id, installation_id, agent_id, channel_type, task_id, receive_id_type, receive_id, reply_message_id, reply_in_thread, text, mention_open_ids, fire_at, status, last_error, sent_message_id, created_at, updated_at, kind, autopilot_id, actor_user_id
+`
+
+type CancelChannelScheduledMessageInWorkspaceParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) CancelChannelScheduledMessageInWorkspace(ctx context.Context, arg CancelChannelScheduledMessageInWorkspaceParams) (ChannelScheduledMessage, error) {
+	row := q.db.QueryRow(ctx, cancelChannelScheduledMessageInWorkspace, arg.ID, arg.WorkspaceID)
+	var i ChannelScheduledMessage
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.InstallationID,
+		&i.AgentID,
+		&i.ChannelType,
+		&i.TaskID,
+		&i.ReceiveIDType,
+		&i.ReceiveID,
+		&i.ReplyMessageID,
+		&i.ReplyInThread,
+		&i.Text,
+		&i.MentionOpenIds,
+		&i.FireAt,
+		&i.Status,
+		&i.LastError,
+		&i.SentMessageID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Kind,
+		&i.AutopilotID,
+		&i.ActorUserID,
 	)
 	return i, err
 }
@@ -60,7 +104,7 @@ WHERE id IN (
     LIMIT $1
     FOR UPDATE SKIP LOCKED
 )
-RETURNING id, workspace_id, installation_id, agent_id, channel_type, task_id, receive_id_type, receive_id, reply_message_id, reply_in_thread, text, mention_open_ids, fire_at, status, last_error, sent_message_id, created_at, updated_at
+RETURNING id, workspace_id, installation_id, agent_id, channel_type, task_id, receive_id_type, receive_id, reply_message_id, reply_in_thread, text, mention_open_ids, fire_at, status, last_error, sent_message_id, created_at, updated_at, kind, autopilot_id, actor_user_id
 `
 
 // Moves due pending rows to 'sending' so exactly one replica sends each.
@@ -93,6 +137,9 @@ func (q *Queries) ClaimDueChannelScheduledMessages(ctx context.Context, batchSiz
 			&i.SentMessageID,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Kind,
+			&i.AutopilotID,
+			&i.ActorUserID,
 		); err != nil {
 			return nil, err
 		}
@@ -108,11 +155,11 @@ const createChannelScheduledMessage = `-- name: CreateChannelScheduledMessage :o
 INSERT INTO channel_scheduled_message (
     workspace_id, installation_id, agent_id, channel_type, task_id,
     receive_id_type, receive_id, reply_message_id, reply_in_thread,
-    text, mention_open_ids, fire_at
+    text, mention_open_ids, fire_at, kind, autopilot_id, actor_user_id
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15
 )
-RETURNING id, workspace_id, installation_id, agent_id, channel_type, task_id, receive_id_type, receive_id, reply_message_id, reply_in_thread, text, mention_open_ids, fire_at, status, last_error, sent_message_id, created_at, updated_at
+RETURNING id, workspace_id, installation_id, agent_id, channel_type, task_id, receive_id_type, receive_id, reply_message_id, reply_in_thread, text, mention_open_ids, fire_at, status, last_error, sent_message_id, created_at, updated_at, kind, autopilot_id, actor_user_id
 `
 
 type CreateChannelScheduledMessageParams struct {
@@ -128,6 +175,9 @@ type CreateChannelScheduledMessageParams struct {
 	Text           string             `json:"text"`
 	MentionOpenIds []string           `json:"mention_open_ids"`
 	FireAt         pgtype.Timestamptz `json:"fire_at"`
+	Kind           string             `json:"kind"`
+	AutopilotID    pgtype.UUID        `json:"autopilot_id"`
+	ActorUserID    pgtype.UUID        `json:"actor_user_id"`
 }
 
 func (q *Queries) CreateChannelScheduledMessage(ctx context.Context, arg CreateChannelScheduledMessageParams) (ChannelScheduledMessage, error) {
@@ -144,6 +194,9 @@ func (q *Queries) CreateChannelScheduledMessage(ctx context.Context, arg CreateC
 		arg.Text,
 		arg.MentionOpenIds,
 		arg.FireAt,
+		arg.Kind,
+		arg.AutopilotID,
+		arg.ActorUserID,
 	)
 	var i ChannelScheduledMessage
 	err := row.Scan(
@@ -165,6 +218,9 @@ func (q *Queries) CreateChannelScheduledMessage(ctx context.Context, arg CreateC
 		&i.SentMessageID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Kind,
+		&i.AutopilotID,
+		&i.ActorUserID,
 	)
 	return i, err
 }
@@ -210,8 +266,47 @@ func (q *Queries) FinishChannelScheduledMessage(ctx context.Context, arg FinishC
 	return err
 }
 
+const getChannelScheduledMessageInWorkspace = `-- name: GetChannelScheduledMessageInWorkspace :one
+SELECT id, workspace_id, installation_id, agent_id, channel_type, task_id, receive_id_type, receive_id, reply_message_id, reply_in_thread, text, mention_open_ids, fire_at, status, last_error, sent_message_id, created_at, updated_at, kind, autopilot_id, actor_user_id FROM channel_scheduled_message
+WHERE id = $1 AND workspace_id = $2
+`
+
+type GetChannelScheduledMessageInWorkspaceParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) GetChannelScheduledMessageInWorkspace(ctx context.Context, arg GetChannelScheduledMessageInWorkspaceParams) (ChannelScheduledMessage, error) {
+	row := q.db.QueryRow(ctx, getChannelScheduledMessageInWorkspace, arg.ID, arg.WorkspaceID)
+	var i ChannelScheduledMessage
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.InstallationID,
+		&i.AgentID,
+		&i.ChannelType,
+		&i.TaskID,
+		&i.ReceiveIDType,
+		&i.ReceiveID,
+		&i.ReplyMessageID,
+		&i.ReplyInThread,
+		&i.Text,
+		&i.MentionOpenIds,
+		&i.FireAt,
+		&i.Status,
+		&i.LastError,
+		&i.SentMessageID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Kind,
+		&i.AutopilotID,
+		&i.ActorUserID,
+	)
+	return i, err
+}
+
 const listPendingChannelScheduledMessagesByAgent = `-- name: ListPendingChannelScheduledMessagesByAgent :many
-SELECT id, workspace_id, installation_id, agent_id, channel_type, task_id, receive_id_type, receive_id, reply_message_id, reply_in_thread, text, mention_open_ids, fire_at, status, last_error, sent_message_id, created_at, updated_at FROM channel_scheduled_message
+SELECT id, workspace_id, installation_id, agent_id, channel_type, task_id, receive_id_type, receive_id, reply_message_id, reply_in_thread, text, mention_open_ids, fire_at, status, last_error, sent_message_id, created_at, updated_at, kind, autopilot_id, actor_user_id FROM channel_scheduled_message
 WHERE workspace_id = $1 AND agent_id = $2 AND status = 'pending'
 ORDER BY fire_at ASC
 LIMIT 100
@@ -250,6 +345,58 @@ func (q *Queries) ListPendingChannelScheduledMessagesByAgent(ctx context.Context
 			&i.SentMessageID,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Kind,
+			&i.AutopilotID,
+			&i.ActorUserID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPendingChannelScheduledMessagesByWorkspace = `-- name: ListPendingChannelScheduledMessagesByWorkspace :many
+SELECT id, workspace_id, installation_id, agent_id, channel_type, task_id, receive_id_type, receive_id, reply_message_id, reply_in_thread, text, mention_open_ids, fire_at, status, last_error, sent_message_id, created_at, updated_at, kind, autopilot_id, actor_user_id FROM channel_scheduled_message
+WHERE workspace_id = $1 AND status = 'pending'
+ORDER BY fire_at ASC
+LIMIT 200
+`
+
+func (q *Queries) ListPendingChannelScheduledMessagesByWorkspace(ctx context.Context, workspaceID pgtype.UUID) ([]ChannelScheduledMessage, error) {
+	rows, err := q.db.Query(ctx, listPendingChannelScheduledMessagesByWorkspace, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ChannelScheduledMessage{}
+	for rows.Next() {
+		var i ChannelScheduledMessage
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.InstallationID,
+			&i.AgentID,
+			&i.ChannelType,
+			&i.TaskID,
+			&i.ReceiveIDType,
+			&i.ReceiveID,
+			&i.ReplyMessageID,
+			&i.ReplyInThread,
+			&i.Text,
+			&i.MentionOpenIds,
+			&i.FireAt,
+			&i.Status,
+			&i.LastError,
+			&i.SentMessageID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Kind,
+			&i.AutopilotID,
+			&i.ActorUserID,
 		); err != nil {
 			return nil, err
 		}

@@ -65,6 +65,7 @@ vi.mock("@multica/core/hooks", () => ({
 
 vi.mock("@multica/core/workspace/queries", () => ({
   memberListOptions: () => ({ queryKey: ["members"], queryFn: vi.fn() }),
+  agentListOptions: () => ({ queryKey: ["agents"], queryFn: vi.fn() }),
 }));
 
 // useActorName is the workspace-wide identity helper. The Installation
@@ -101,6 +102,8 @@ vi.mock("@multica/core/lark", () => ({
     queryKey: ["lark", "installations"],
     queryFn: vi.fn(),
   }),
+  larkScheduledOptions: () => ({ queryKey: ["lark", "scheduled"], queryFn: vi.fn() }),
+  useCancelLarkScheduled: () => ({ mutate: vi.fn(), isPending: false, variables: undefined }),
   larkKeys: { installations: (wsId: string) => ["lark", "installations", wsId] },
 }));
 

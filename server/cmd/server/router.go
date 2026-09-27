@@ -623,6 +623,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				if toolClient, ok := larkClient.(lark.ToolAPIClient); ok {
 					larkTools := lark.NewTools(queries, installSvc, toolClient, slog.Default())
 					h.LarkTools = larkTools
+					larkTools.SetAutopilotDispatcher(h.AutopilotService)
 					go larkTools.RunScheduler(context.Background())
 					if store != nil {
 						patcher.SetReplyAttachments(lark.ReplyAttachmentDeps{
@@ -1829,6 +1830,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Use(middleware.RequireWorkspaceMemberFromURL(queries, "id"))
 					r.Get("/lark/installations", h.ListLarkInstallations)
 					r.Delete("/lark/installations/{installationId}", h.RevokeLarkInstallation)
+					r.Get("/lark/scheduled", h.ListWorkspaceLarkScheduled)
+					r.Delete("/lark/scheduled/{scheduledId}", h.CancelWorkspaceLarkScheduled)
 					// Device-flow scan-to-install. Begin opens a new
 					// registration session against Lark and returns
 					// the QR-code URL; the frontend dialog then polls
@@ -2433,6 +2436,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Get("/api/lark/scheduled", h.ListLarkScheduled)
 			r.Delete("/api/lark/scheduled/{id}", h.CancelLarkScheduled)
 			r.Get("/api/lark/doc", h.ReadLarkDoc)
+			r.Post("/api/lark/docs", h.CreateLarkDoc)
+			r.Post("/api/lark/wakeups", h.ScheduleLarkWakeup)
 			r.Get("/api/lark/chats", h.ListLarkChats)
 			r.Get("/api/lark/members", h.ListLarkChatMembers)
 			r.Post("/api/lark/groups", h.CreateLarkGroup)

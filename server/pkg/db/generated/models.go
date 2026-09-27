@@ -478,6 +478,9 @@ type ChannelScheduledMessage struct {
 	SentMessageID  string             `json:"sent_message_id"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+	Kind           string             `json:"kind"`
+	AutopilotID    pgtype.UUID        `json:"autopilot_id"`
+	ActorUserID    pgtype.UUID        `json:"actor_user_id"`
 }
 
 type ChannelTaskDelivery struct {

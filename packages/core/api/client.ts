@@ -179,6 +179,7 @@ import type {
   BeginLarkInstallResponse,
   LarkInstallStatusResponse,
   RedeemLarkBindingTokenResponse,
+  LarkScheduledMessage,
   ComposioToolkit,
   ComposioConnection,
   ComposioConnectInitResponse,
@@ -248,6 +249,7 @@ import {
   RuntimeProfileListSchema,
   AgentTaskListSchema,
   AgentActivityBucketListSchema,
+  LarkScheduledListSchema,
   AttachmentResponseSchema,
   CancelTaskResponseSchema,
   ChatDraftRestoresResponseSchema,
@@ -4808,6 +4810,22 @@ export class ApiClient {
 
   async deleteLarkInstallation(workspaceId: string, installationId: string): Promise<void> {
     await this.fetch(`/api/workspaces/${workspaceId}/lark/installations/${installationId}`, {
+      method: "DELETE",
+    });
+  }
+
+  async listLarkScheduled(workspaceId: string): Promise<LarkScheduledMessage[]> {
+    const raw = await this.fetch<unknown>(`/api/workspaces/${workspaceId}/lark/scheduled`);
+    return parseWithFallback<{ scheduled: LarkScheduledMessage[] }>(
+      raw,
+      LarkScheduledListSchema,
+      { scheduled: [] },
+      { endpoint: "GET /api/workspaces/:id/lark/scheduled" },
+    ).scheduled;
+  }
+
+  async cancelLarkScheduled(workspaceId: string, scheduledId: string): Promise<void> {
+    await this.fetch(`/api/workspaces/${workspaceId}/lark/scheduled/${scheduledId}`, {
       method: "DELETE",
     });
   }

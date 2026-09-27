@@ -76,12 +76,48 @@ var larkScheduledCancelCmd = &cobra.Command{
 
 var larkDocCmd = &cobra.Command{
 	Use:   "doc <url>",
-	Short: "Read a Feishu doc, wiki page or sheet as text",
-	Long: `Read a Feishu document link (…/docx/…, …/wiki/…, …/sheets/…) as plain text.
-Sheets are returned as tab-separated rows. The bot can only read documents that
+	Short: "Read a Feishu doc, wiki page, sheet or base as text (or: doc create)",
+	Long: `Read a Feishu document link (…/docx/…, …/docs/…, …/wiki/…, …/sheets/…, …/base/…)
+as plain text. Sheets and bases (多维表格) are returned as tab-separated rows.
+Use "multica lark doc create" to write a new document. The bot can only read documents that
 are shared with it (or with the whole organization, if the app has that scope).`,
 	Args: exactArgs(1),
 	RunE: runLarkDoc,
+}
+
+var larkDocCreateCmd = &cobra.Command{
+	Use:   "create",
+	Short: "Create a Feishu doc from markdown and share it",
+	Long: `Create a Feishu document owned by the bot from markdown (headings, lists, tables,
+code blocks, links; images are not carried over). The person who asked gets full
+access and, by default, everyone in the organization can read it via the link.
+Prints the document URL — send it in your reply or with "multica lark send".`,
+	Example: `  # Write a report file into a doc
+  $ multica lark doc create --title "本周周报" --file ./report.md
+
+  # Let two colleagues edit, keep the link private
+  $ multica lark doc create --title "方案" --file ./plan.md --share-with ou_aaa --share-with ou_bbb --link off`,
+	Args: cobra.NoArgs,
+	RunE: runLarkDocCreate,
+}
+
+var larkWakeupCmd = &cobra.Command{
+	Use:   "wakeup <instructions>",
+	Short: "Run this agent again later (once or on a schedule) and post the result to Feishu",
+	Long: `Schedule this agent to run again with the given instructions — once (--in / --at)
+or repeatedly (--cron) — and post its result into the Feishu conversation.
+
+Unlike "send --in", which only posts fixed text, a wake-up is a real agent run:
+use it for "every morning at 9 summarize ...", "tomorrow at 3pm check ... and
+tell me". It is stored as a run_only autopilot, so it shows up on the web
+Autopilots page and "multica autopilot list/delete" manage it.`,
+	Example: `  # Every weekday at 9:00 Beijing time
+  $ multica lark wakeup --cron "0 9 * * 1-5" "汇总昨天群里讨论的要点"
+
+  # Once, in 2 hours, and @ the person who asked
+  $ multica lark wakeup --in 2h --mention-requester "检查一下部署是否完成"`,
+	Args: exactArgs(1),
+	RunE: runLarkWakeup,
 }
 
 var larkChatsCmd = &cobra.Command{
@@ -124,6 +160,16 @@ var larkGroupAddCmd = &cobra.Command{
 func init() {
 	addLarkSendFlags(larkSendCmd)
 
+	larkDocCreateCmd.Flags().String("title", "", "Document title (required)")
+	larkDocCreateCmd.Flags().String("file", "", "Markdown file with the document content")
+	larkDocCreateCmd.Flags().String("content", "", "Markdown content (alternative to --file)")
+	larkDocCreateCmd.Flags().StringArray("share-with", nil, "open_id to grant edit access (repeatable)")
+	larkDocCreateCmd.Flags().Bool("no-requester", false, "Do not grant the requester access")
+	larkDocCreateCmd.Flags().String("link", "tenant", "Link sharing: tenant, tenant-edit, anyone, anyone-edit or off")
+	larkDocCmd.AddCommand(larkDocCreateCmd)
+
+	addLarkWakeupFlags(larkWakeupCmd)
+
 	larkMembersCmd.Flags().String("chat", "", "chat_id (default: the current conversation)")
 
 	larkGroupCreateCmd.Flags().String("description", "", "Group description")
@@ -135,7 +181,7 @@ func init() {
 
 	larkScheduledCmd.AddCommand(larkScheduledListCmd, larkScheduledCancelCmd)
 	larkGroupCmd.AddCommand(larkGroupCreateCmd, larkGroupAddCmd)
-	larkCmd.AddCommand(larkContextCmd, larkSendCmd, larkScheduledCmd, larkDocCmd, larkChatsCmd, larkMembersCmd, larkGroupCmd)
+	larkCmd.AddCommand(larkContextCmd, larkSendCmd, larkScheduledCmd, larkDocCmd, larkChatsCmd, larkMembersCmd, larkGroupCmd, larkWakeupCmd)
 }
 
 // addLarkSendFlags registers the send flags; tests build a fresh command with it.
@@ -148,6 +194,18 @@ func addLarkSendFlags(cmd *cobra.Command) {
 	cmd.Flags().Bool("mention-requester", false, "@-mention the person whose message started this task")
 	cmd.Flags().String("in", "", "Schedule the message after this delay, e.g. 90s, 2m, 1h30m")
 	cmd.Flags().String("at", "", "Schedule the message at this time (RFC 3339, e.g. 2026-09-27T09:00:00+08:00)")
+}
+
+// addLarkWakeupFlags registers the wakeup flags; tests build a fresh command with it.
+func addLarkWakeupFlags(cmd *cobra.Command) {
+	cmd.Flags().String("in", "", "Run once after this delay, e.g. 30m, 2h")
+	cmd.Flags().String("at", "", "Run once at this time (RFC 3339, e.g. 2026-09-28T15:00:00+08:00)")
+	cmd.Flags().String("cron", "", "Run on this cron schedule, e.g. \"0 9 * * 1-5\"")
+	cmd.Flags().String("timezone", "Asia/Shanghai", "IANA timezone for --cron")
+	cmd.Flags().String("title", "", "Title shown on the Autopilots page (default: the instructions)")
+	cmd.Flags().String("chat", "", "chat_id to post the result to (default: the current conversation)")
+	cmd.Flags().String("user", "", "open_id to post the result to as a direct message")
+	cmd.Flags().Bool("mention-requester", false, "@-mention the person whose message started this task in the result")
 }
 
 func larkGet(cmd *cobra.Command, path string) error {
@@ -263,6 +321,176 @@ func runLarkScheduledCancel(cmd *cobra.Command, args []string) error {
 
 func runLarkDoc(cmd *cobra.Command, args []string) error {
 	return larkGet(cmd, "/api/lark/doc?url="+url.QueryEscape(args[0]))
+}
+
+// larkLinkShares maps the --link values onto Lark's link_share_entity.
+var larkLinkShares = map[string]string{
+	"tenant": "tenant_readable", "tenant-edit": "tenant_editable",
+	"anyone": "anyone_readable", "anyone-edit": "anyone_editable", "off": "closed",
+}
+
+func runLarkDocCreate(cmd *cobra.Command, _ []string) error {
+	title, _ := cmd.Flags().GetString("title")
+	if strings.TrimSpace(title) == "" {
+		return fmt.Errorf("--title is required")
+	}
+	file, _ := cmd.Flags().GetString("file")
+	content, _ := cmd.Flags().GetString("content")
+	if file != "" && content != "" {
+		return fmt.Errorf("pass either --file or --content, not both")
+	}
+	if file != "" {
+		data, err := os.ReadFile(file)
+		if err != nil {
+			return fmt.Errorf("read file %s: %w", file, err)
+		}
+		content = string(data)
+	}
+	link, _ := cmd.Flags().GetString("link")
+	linkShare, ok := larkLinkShares[link]
+	if !ok {
+		return fmt.Errorf("--link must be tenant, tenant-edit, anyone, anyone-edit or off")
+	}
+	shareWith, _ := cmd.Flags().GetStringArray("share-with")
+	noRequester, _ := cmd.Flags().GetBool("no-requester")
+	return larkPost(cmd, "/api/lark/docs", map[string]any{
+		"title":        title,
+		"markdown":     content,
+		"share_with":   shareWith,
+		"no_requester": noRequester,
+		"link_share":   linkShare,
+	})
+}
+
+// wakeupDeliveryFlags renders the `multica lark send` target flags the
+// woken-up run must use to deliver its result.
+func wakeupDeliveryFlags(chat, user, mention string) string {
+	flags := "--chat " + chat
+	if user != "" {
+		flags = "--user " + user
+	}
+	if mention != "" {
+		flags += " --mention " + mention
+	}
+	return flags
+}
+
+// wakeupPrompt appends delivery instructions to the user's instructions: an
+// autopilot run has no Feishu conversation of its own, so its answer reaches
+// Feishu only if the run sends it.
+func wakeupPrompt(instructions, deliveryFlags string) string {
+	return strings.TrimSpace(instructions) + "\n\n---\n" +
+		"This run was scheduled from a Feishu conversation. Nothing you write in this run reaches Feishu on its own — when you are done, deliver the result yourself, exactly once:\n" +
+		"  multica lark send " + deliveryFlags + " \"<your result>\"\n" +
+		"Attach files with --file <path>, or put a long result into a doc with `multica lark doc create` and send its link.\n"
+}
+
+func runLarkWakeup(cmd *cobra.Command, args []string) error {
+	instructions := strings.TrimSpace(args[0])
+	if instructions == "" {
+		return fmt.Errorf("the instructions are empty")
+	}
+	delay, _ := cmd.Flags().GetString("in")
+	at, _ := cmd.Flags().GetString("at")
+	cron, _ := cmd.Flags().GetString("cron")
+	set := 0
+	for _, v := range []string{delay, at, cron} {
+		if v != "" {
+			set++
+		}
+	}
+	if set != 1 {
+		return fmt.Errorf("pass exactly one of --in, --at or --cron")
+	}
+	chat, _ := cmd.Flags().GetString("chat")
+	user, _ := cmd.Flags().GetString("user")
+	if chat != "" && user != "" {
+		return fmt.Errorf("pass either --chat or --user, not both")
+	}
+	mentionRequester, _ := cmd.Flags().GetBool("mention-requester")
+
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
+	}
+	if client.AgentID == "" {
+		return fmt.Errorf("no agent in context: run this inside an agent task")
+	}
+	if _, err := requireWorkspaceID(cmd); err != nil {
+		return err
+	}
+	ctx, cancel := cli.APIContext(context.Background())
+	defer cancel()
+
+	var info struct {
+		CurrentChat *struct {
+			ChatID          string `json:"chat_id"`
+			RequesterOpenID string `json:"requester_open_id"`
+		} `json:"current_chat"`
+	}
+	if err := client.GetJSON(ctx, "/api/lark/context", &info); err != nil {
+		return err
+	}
+	if chat == "" && user == "" {
+		if info.CurrentChat == nil {
+			return fmt.Errorf("no target: pass --chat <chat_id> or --user <open_id> (this task is not running in a Feishu chat)")
+		}
+		chat = info.CurrentChat.ChatID
+	}
+	mention := ""
+	if mentionRequester {
+		if info.CurrentChat == nil || info.CurrentChat.RequesterOpenID == "" {
+			return fmt.Errorf("there is no requester to mention: this task was not started from a Feishu message")
+		}
+		mention = info.CurrentChat.RequesterOpenID
+	}
+
+	title, _ := cmd.Flags().GetString("title")
+	if strings.TrimSpace(title) == "" {
+		title = instructions
+	}
+	if r := []rune(title); len(r) > 60 {
+		title = string(r[:60]) + "…"
+	}
+	var ap map[string]any
+	if err := client.PostJSON(ctx, "/api/autopilots", map[string]any{
+		"title":          title,
+		"assignee_id":    client.AgentID,
+		"execution_mode": "run_only",
+		"description":    wakeupPrompt(instructions, wakeupDeliveryFlags(chat, user, mention)),
+	}, &ap); err != nil {
+		return fmt.Errorf("create autopilot: %w", err)
+	}
+	autopilotID := strVal(ap, "id")
+	cleanup := func() {
+		_ = client.DeleteJSON(context.Background(), "/api/autopilots/"+url.PathEscape(autopilotID))
+	}
+
+	result := map[string]any{"autopilot_id": autopilotID, "title": title}
+	if cron != "" {
+		timezone, _ := cmd.Flags().GetString("timezone")
+		var trigger map[string]any
+		if err := client.PostJSON(ctx, "/api/autopilots/"+url.PathEscape(autopilotID)+"/triggers", map[string]any{
+			"kind": "schedule", "cron_expression": cron, "timezone": timezone, "label": "Feishu wake-up",
+		}, &trigger); err != nil {
+			cleanup()
+			return fmt.Errorf("add schedule: %w", err)
+		}
+		result["cron"] = cron
+		result["timezone"] = timezone
+		result["next_run_at"] = trigger["next_run_at"]
+	} else {
+		var row map[string]any
+		if err := client.PostJSON(ctx, "/api/lark/wakeups", map[string]any{
+			"autopilot_id": autopilotID, "delay": delay, "send_at": at,
+		}, &row); err != nil {
+			cleanup()
+			return err
+		}
+		result["run_at"] = row["fire_at"]
+		result["scheduled_id"] = row["id"]
+	}
+	return cli.PrintJSON(os.Stdout, result)
 }
 
 func runLarkChats(cmd *cobra.Command, _ []string) error {

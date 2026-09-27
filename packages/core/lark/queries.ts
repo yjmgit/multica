@@ -7,11 +7,22 @@ import { api } from "../api";
 export const larkKeys = {
   all: (wsId: string) => ["lark", wsId] as const,
   installations: (wsId: string) => [...larkKeys.all(wsId), "installations"] as const,
+  scheduled: (wsId: string) => [...larkKeys.all(wsId), "scheduled"] as const,
 };
 
 export const larkInstallationsOptions = (wsId: string) =>
   queryOptions({
     queryKey: larkKeys.installations(wsId),
     queryFn: () => api.listLarkInstallations(wsId),
+    enabled: !!wsId,
+  });
+
+/** Pending Feishu messages and one-off wake-ups agents scheduled. There is
+ * no realtime event for them; the list refetches on focus and after a
+ * cancel, and each row carries its own send time. */
+export const larkScheduledOptions = (wsId: string) =>
+  queryOptions({
+    queryKey: larkKeys.scheduled(wsId),
+    queryFn: () => api.listLarkScheduled(wsId),
     enabled: !!wsId,
   });

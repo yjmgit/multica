@@ -222,6 +222,7 @@ export type {
   BeginLarkInstallResponse,
   LarkInstallStatusResponse,
   RedeemLarkBindingTokenResponse,
+  LarkScheduledMessage,
 } from "./lark";
 export type {
   ComposioToolkit,

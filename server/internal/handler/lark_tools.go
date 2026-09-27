@@ -12,10 +12,12 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/multica-ai/multica/server/internal/integrations/lark"
 	"github.com/multica-ai/multica/server/internal/logger"
 	"github.com/multica-ai/multica/server/internal/util"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 // Agent-facing Feishu tools (`multica lark ...`). Every endpoint accepts only
@@ -345,4 +347,145 @@ func (h *Handler) AddLarkGroupMembers(w http.ResponseWriter, r *http.Request) {
 		invalid = []string{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"invalid_members": invalid})
+}
+
+// CreateLarkDocRequest is the `multica lark doc create` body.
+type CreateLarkDocRequest struct {
+	Title       string   `json:"title"`
+	Markdown    string   `json:"markdown"`
+	ShareWith   []string `json:"share_with"`
+	NoRequester bool     `json:"no_requester"`
+	LinkShare   string   `json:"link_share"`
+}
+
+// CreateLarkDoc serves `multica lark doc create`.
+func (h *Handler) CreateLarkDoc(w http.ResponseWriter, r *http.Request) {
+	scope, ok := h.larkToolScope(w, r)
+	if !ok {
+		return
+	}
+	var req CreateLarkDocRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	doc, err := h.LarkTools.CreateDoc(r.Context(), scope, lark.CreateDocInput{
+		Title: req.Title, Markdown: req.Markdown, ShareWith: req.ShareWith,
+		NoRequester: req.NoRequester, LinkShare: req.LinkShare,
+	})
+	if err != nil {
+		writeLarkToolError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, doc)
+}
+
+// ScheduleLarkWakeupRequest is the one-off half of `multica lark wakeup`: the
+// CLI has already created the run_only autopilot.
+type ScheduleLarkWakeupRequest struct {
+	AutopilotID string `json:"autopilot_id"`
+	Delay       string `json:"delay"`
+	SendAt      string `json:"send_at"`
+}
+
+// ScheduleLarkWakeup serves the one-off half of `multica lark wakeup`. The
+// run is started for the member the calling task acts for.
+func (h *Handler) ScheduleLarkWakeup(w http.ResponseWriter, r *http.Request) {
+	scope, ok := h.larkToolScope(w, r)
+	if !ok {
+		return
+	}
+	var req ScheduleLarkWakeupRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	autopilotID, ok := parseUUIDOrBadRequest(w, req.AutopilotID, "autopilot_id")
+	if !ok {
+		return
+	}
+	fireAt, scheduled, err := larkSendTime(strings.TrimSpace(req.Delay), strings.TrimSpace(req.SendAt), time.Now())
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if !scheduled {
+		writeError(w, http.StatusBadRequest, "pass delay or send_at")
+		return
+	}
+	actor, err := util.ParseUUID(r.Header.Get("X-User-ID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "missing task context")
+		return
+	}
+	row, err := h.LarkTools.ScheduleAgentRun(r.Context(), scope, lark.ScheduleAgentRunInput{
+		AutopilotID: autopilotID, ActorUserID: actor, FireAt: fireAt,
+	})
+	if err != nil {
+		writeLarkToolError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, row)
+}
+
+// ListWorkspaceLarkScheduled (GET /api/workspaces/{id}/lark/scheduled) lists
+// the workspace's pending Feishu scheduled messages and one-off wake-ups.
+// Member-visible, like the installation list.
+func (h *Handler) ListWorkspaceLarkScheduled(w http.ResponseWriter, r *http.Request) {
+	wsUUID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "id"), "workspace id")
+	if !ok {
+		return
+	}
+	rows, err := h.Queries.ListPendingChannelScheduledMessagesByWorkspace(r.Context(), wsUUID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list scheduled messages")
+		return
+	}
+	out := make([]lark.ScheduledMessage, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, lark.ScheduledMessageFromRow(row))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"scheduled": out})
+}
+
+// CancelWorkspaceLarkScheduled (DELETE /api/workspaces/{id}/lark/scheduled/{scheduledId})
+// cancels a pending scheduled message. Authorized like disconnecting the bot:
+// the agent's owner or a workspace owner/admin.
+func (h *Handler) CancelWorkspaceLarkScheduled(w http.ResponseWriter, r *http.Request) {
+	wsUUID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "id"), "workspace id")
+	if !ok {
+		return
+	}
+	id, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "scheduledId"), "scheduled message id")
+	if !ok {
+		return
+	}
+	existing, err := h.Queries.GetChannelScheduledMessageInWorkspace(r.Context(), db.GetChannelScheduledMessageInWorkspaceParams{ID: id, WorkspaceID: wsUUID})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "scheduled message not found or no longer pending")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to load scheduled message")
+		return
+	}
+	agentID := existing.AgentID
+	agent, err := h.Queries.GetAgentInWorkspace(r.Context(), db.GetAgentInWorkspaceParams{ID: agentID, WorkspaceID: wsUUID})
+	if err != nil {
+		if _, ok := h.requireWorkspaceRole(w, r, uuidToString(wsUUID), "scheduled message not found", "owner", "admin"); !ok {
+			return
+		}
+	} else if !h.canManageAgent(w, r, agent) {
+		return
+	}
+	row, err := h.Queries.CancelChannelScheduledMessageInWorkspace(r.Context(), db.CancelChannelScheduledMessageInWorkspaceParams{ID: id, WorkspaceID: wsUUID})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "scheduled message not found or no longer pending")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to cancel scheduled message")
+		return
+	}
+	writeJSON(w, http.StatusOK, lark.ScheduledMessageFromRow(row))
 }

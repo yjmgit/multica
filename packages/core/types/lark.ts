@@ -74,3 +74,20 @@ export interface RedeemLarkBindingTokenResponse {
   installation_id: string;
   lark_open_id: string;
 }
+
+/** A pending Feishu message or one-off agent wake-up an agent scheduled
+ * with `multica lark send --in/--at` or `multica lark wakeup --in/--at`.
+ * `kind` is "message" (posts `text`) or "agent_run" (starts `autopilot_id`;
+ * `text` is its title). Unknown kinds render as messages. */
+export interface LarkScheduledMessage {
+  id: string;
+  kind: string;
+  autopilot_id?: string;
+  agent_id: string;
+  receive_id_type: string;
+  receive_id: string;
+  text: string;
+  mention_open_ids: string[];
+  fire_at: string;
+  status: string;
+}

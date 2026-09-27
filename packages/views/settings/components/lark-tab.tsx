@@ -43,6 +43,7 @@ import type { LarkInstallation, LarkInstallStatusResponse } from "@multica/core/
 import { ActorAvatar } from "../../common/actor-avatar";
 import { docsLocalePrefix } from "../../common/docs-locale";
 import { useLocale, useT } from "../../i18n";
+import { LarkScheduledSection } from "./lark-scheduled-section";
 
 // MUL-3083: the Lark (international, open.larksuite.com) "connect a Bot"
 // entry is temporarily hidden while its install → inbound pipeline is
@@ -173,6 +174,8 @@ export function LarkTab() {
           )}
         </section>
       )}
+
+      {configured && <LarkScheduledSection wsId={wsId} canManageWorkspace={canManage} />}
 
       <AlertDialog
         open={!!disconnectTarget}

@@ -83,3 +83,98 @@ func TestRunLarkSendRequiresContent(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func newLarkWakeupTestCmd() *cobra.Command {
+	cmd := &cobra.Command{Use: "wakeup"}
+	addLarkWakeupFlags(cmd)
+	return cmd
+}
+
+// A recurring wake-up is a run_only autopilot for this agent plus a schedule
+// trigger, and its prompt tells the run how to post back to the chat.
+func TestRunLarkWakeupRecurringCreatesAutopilotAndTrigger(t *testing.T) {
+	var created, trigger map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/lark/context":
+			_ = json.NewEncoder(w).Encode(map[string]any{"current_chat": map[string]any{"chat_id": "oc_g", "requester_open_id": "ou_asker"}})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/autopilots":
+			_ = json.NewDecoder(r.Body).Decode(&created)
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "ap-1"})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/autopilots/ap-1/triggers":
+			_ = json.NewDecoder(r.Body).Decode(&trigger)
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "tr-1", "next_run_at": "2026-09-28T01:00:00Z"})
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+	setCLITestServerEnv(t, srv.URL)
+	t.Setenv("MULTICA_TOKEN", "mat_test-token")
+	t.Setenv("MULTICA_AGENT_ID", "agent-1")
+
+	cmd := newLarkWakeupTestCmd()
+	_ = cmd.Flags().Set("cron", "0 9 * * 1-5")
+	_ = cmd.Flags().Set("mention-requester", "true")
+	out, err := captureStdout(t, func() error { return runLarkWakeup(cmd, []string{"汇总昨天的讨论"}) })
+	if err != nil {
+		t.Fatalf("runLarkWakeup: %v", err)
+	}
+	if created["assignee_id"] != "agent-1" || created["execution_mode"] != "run_only" || created["title"] != "汇总昨天的讨论" {
+		t.Fatalf("autopilot body = %v", created)
+	}
+	desc, _ := created["description"].(string)
+	if !strings.HasPrefix(desc, "汇总昨天的讨论") || !strings.Contains(desc, "multica lark send --chat oc_g --mention ou_asker") {
+		t.Fatalf("description = %q", desc)
+	}
+	if trigger["kind"] != "schedule" || trigger["cron_expression"] != "0 9 * * 1-5" || trigger["timezone"] != "Asia/Shanghai" {
+		t.Fatalf("trigger body = %v", trigger)
+	}
+	if !strings.Contains(out, "ap-1") || !strings.Contains(out, "2026-09-28T01:00:00Z") {
+		t.Fatalf("stdout = %q", out)
+	}
+}
+
+// A one-off wake-up whose scheduling fails must not leave an orphan autopilot.
+func TestRunLarkWakeupOnceDeletesAutopilotWhenSchedulingFails(t *testing.T) {
+	deleted := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/lark/context":
+			_ = json.NewEncoder(w).Encode(map[string]any{"current_chat": map[string]any{"chat_id": "oc_g"}})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/autopilots":
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "ap-2"})
+		case r.URL.Path == "/api/lark/wakeups":
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]any{"error": "the wake-up time must be in the future"})
+		case r.Method == http.MethodDelete && r.URL.Path == "/api/autopilots/ap-2":
+			deleted = true
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+	setCLITestServerEnv(t, srv.URL)
+	t.Setenv("MULTICA_TOKEN", "mat_test-token")
+	t.Setenv("MULTICA_AGENT_ID", "agent-1")
+
+	cmd := newLarkWakeupTestCmd()
+	_ = cmd.Flags().Set("at", "2020-01-01T00:00:00+08:00")
+	if err := runLarkWakeup(cmd, []string{"x"}); err == nil {
+		t.Fatal("want error")
+	}
+	if !deleted {
+		t.Fatal("the autopilot was not deleted after scheduling failed")
+	}
+}
+
+func TestRunLarkWakeupNeedsExactlyOneTime(t *testing.T) {
+	cmd := newLarkWakeupTestCmd()
+	if err := runLarkWakeup(cmd, []string{"x"}); err == nil || !strings.Contains(err.Error(), "exactly one") {
+		t.Fatalf("err = %v", err)
+	}
+}

@@ -2,9 +2,9 @@
 INSERT INTO channel_scheduled_message (
     workspace_id, installation_id, agent_id, channel_type, task_id,
     receive_id_type, receive_id, reply_message_id, reply_in_thread,
-    text, mention_open_ids, fire_at
+    text, mention_open_ids, fire_at, kind, autopilot_id, actor_user_id
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15
 )
 RETURNING *;
 
@@ -47,3 +47,19 @@ WHERE id = sqlc.arg(id) AND status = 'sending';
 UPDATE channel_scheduled_message
 SET status = 'failed', last_error = 'interrupted while sending', updated_at = now()
 WHERE status = 'sending' AND updated_at < now() - sqlc.arg(stale_after)::interval;
+
+-- name: ListPendingChannelScheduledMessagesByWorkspace :many
+SELECT * FROM channel_scheduled_message
+WHERE workspace_id = $1 AND status = 'pending'
+ORDER BY fire_at ASC
+LIMIT 200;
+
+-- name: CancelChannelScheduledMessageInWorkspace :one
+UPDATE channel_scheduled_message
+SET status = 'cancelled', updated_at = now()
+WHERE id = $1 AND workspace_id = $2 AND status = 'pending'
+RETURNING *;
+
+-- name: GetChannelScheduledMessageInWorkspace :one
+SELECT * FROM channel_scheduled_message
+WHERE id = $1 AND workspace_id = $2;

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -245,5 +246,142 @@ func TestMessageFileType(t *testing.T) {
 		if got := messageFileType(name); got != want {
 			t.Errorf("messageFileType(%q) = %q, want %q", name, got, want)
 		}
+	}
+}
+
+func TestHTTPClientCreateDocFromMarkdown(t *testing.T) {
+	fake := newLarkFake(t)
+	fake.stubToken("t-1", 7200)
+	fake.mux.HandleFunc("/open-apis/docx/v1/documents", func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body["title"] != "周报" {
+			t.Errorf("title = %v", body["title"])
+		}
+		writeJSON(w, map[string]any{"code": 0, "data": map[string]any{"document": map[string]any{"document_id": "doxcnNew"}}})
+	})
+	fake.mux.HandleFunc("/open-apis/docx/v1/documents/blocks/convert", func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body["content_type"] != "markdown" || body["content"] != "# Hi\n![x](y)" {
+			t.Errorf("convert body = %v", body)
+		}
+		writeJSON(w, map[string]any{"code": 0, "data": map[string]any{
+			"first_level_block_ids": []any{"h1", "img", "tbl"},
+			"blocks": []any{
+				map[string]any{"block_id": "h1", "block_type": 3.0},
+				map[string]any{"block_id": "img", "block_type": 27.0},
+				map[string]any{"block_id": "tbl", "block_type": 31.0, "children": []any{"cell"},
+					"table": map[string]any{"property": map[string]any{"row_size": 1.0, "merge_info": []any{}}}},
+				map[string]any{"block_id": "cell", "block_type": 32.0},
+			},
+		}})
+	})
+	var inserted map[string]any
+	fake.mux.HandleFunc("/open-apis/docx/v1/documents/doxcnNew/blocks/doxcnNew/descendant", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&inserted)
+		writeJSON(w, map[string]any{"code": 0})
+	})
+	c := newTestClient(fake, time.Now)
+	id, err := c.CreateDocFromMarkdown(context.Background(), testCreds(), "周报", "# Hi\n![x](y)")
+	if err != nil || id != "doxcnNew" {
+		t.Fatalf("CreateDocFromMarkdown = %q, %v", id, err)
+	}
+	children, _ := inserted["children_id"].([]any)
+	descendants, _ := inserted["descendants"].([]any)
+	if len(children) != 2 || children[0] != "h1" || children[1] != "tbl" || len(descendants) != 3 {
+		t.Fatalf("inserted children=%v descendants=%d; images must be dropped", children, len(descendants))
+	}
+	table := descendants[1].(map[string]any)["table"].(map[string]any)["property"].(map[string]any)
+	if _, ok := table["merge_info"]; ok {
+		t.Fatal("merge_info must be stripped before insert")
+	}
+}
+
+func TestDescendantBatchesSplitLargeDocuments(t *testing.T) {
+	var ids []string
+	var blocks []map[string]any
+	for i := 0; i < maxDescendantsPerInsert+10; i++ {
+		id := "b" + strconv.Itoa(i)
+		ids = append(ids, id)
+		blocks = append(blocks, map[string]any{"block_id": id, "block_type": 2.0})
+	}
+	batches := descendantBatches(ids, blocks)
+	if len(batches) != 2 || len(batches[0].blocks) != maxDescendantsPerInsert || len(batches[1].children) != 10 {
+		t.Fatalf("batches = %d (%d, %d)", len(batches), len(batches[0].blocks), len(batches[len(batches)-1].children))
+	}
+}
+
+func TestHTTPClientShareDocAndURL(t *testing.T) {
+	fake := newLarkFake(t)
+	fake.stubToken("t-1", 7200)
+	var grants []map[string]any
+	fake.mux.HandleFunc("/open-apis/drive/v1/permissions/doxcn1/members", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("type") != "docx" {
+			t.Errorf("type = %q", r.URL.Query().Get("type"))
+		}
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		grants = append(grants, body)
+		writeJSON(w, map[string]any{"code": 0})
+	})
+	var link map[string]any
+	fake.mux.HandleFunc("/open-apis/drive/v1/permissions/doxcn1/public", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPatch {
+			t.Errorf("method = %s", r.Method)
+		}
+		_ = json.NewDecoder(r.Body).Decode(&link)
+		writeJSON(w, map[string]any{"code": 0})
+	})
+	fake.mux.HandleFunc("/open-apis/drive/v1/metas/batch_query", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, map[string]any{"code": 0, "data": map[string]any{"metas": []any{map[string]any{"url": "https://acme.feishu.cn/docx/doxcn1"}}}})
+	})
+	c := newTestClient(fake, time.Now)
+	ctx := context.Background()
+	if err := c.ShareDoc(ctx, testCreds(), "doxcn1", []string{"ou_a"}, "edit", "tenant_readable"); err != nil {
+		t.Fatal(err)
+	}
+	if len(grants) != 1 || grants[0]["member_id"] != "ou_a" || grants[0]["perm"] != "edit" || link["link_share_entity"] != "tenant_readable" {
+		t.Fatalf("grants = %v link = %v", grants, link)
+	}
+	u, err := c.DocURL(ctx, testCreds(), "doxcn1")
+	if err != nil || u != "https://acme.feishu.cn/docx/doxcn1" {
+		t.Fatalf("DocURL = %q, %v", u, err)
+	}
+}
+
+func TestHTTPClientReadsLegacyDocAndBase(t *testing.T) {
+	fake := newLarkFake(t)
+	fake.stubToken("t-1", 7200)
+	fake.mux.HandleFunc("/open-apis/doc/v2/doccn1/raw_content", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, map[string]any{"code": 0, "data": map[string]any{"content": "old"}})
+	})
+	fake.mux.HandleFunc("/open-apis/bitable/v1/apps/bas1/tables", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, map[string]any{"code": 0, "data": map[string]any{"items": []any{map[string]any{"table_id": "tbl1", "name": "T"}}}})
+	})
+	fake.mux.HandleFunc("/open-apis/bitable/v1/apps/bas1/tables/tbl1/fields", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, map[string]any{"code": 0, "data": map[string]any{"items": []any{map[string]any{"field_name": "A"}}}})
+	})
+	fake.mux.HandleFunc("/open-apis/bitable/v1/apps/bas1/tables/tbl1/records", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, map[string]any{"code": 0, "data": map[string]any{
+			"items": []any{map[string]any{"fields": map[string]any{"A": "x"}}}, "has_more": true, "page_token": "p2",
+		}})
+	})
+	c := newTestClient(fake, time.Now)
+	ctx := context.Background()
+	if got, err := c.GetLegacyDocRawContent(ctx, testCreds(), "doccn1"); err != nil || got != "old" {
+		t.Fatalf("legacy = %q, %v", got, err)
+	}
+	tables, err := c.ListBitableTables(ctx, testCreds(), "bas1")
+	if err != nil || len(tables) != 1 || tables[0].TableID != "tbl1" {
+		t.Fatalf("tables = %v, %v", tables, err)
+	}
+	fields, err := c.ListBitableFields(ctx, testCreds(), "bas1", "tbl1")
+	if err != nil || len(fields) != 1 || fields[0] != "A" {
+		t.Fatalf("fields = %v, %v", fields, err)
+	}
+	records, next, err := c.ListBitableRecords(ctx, testCreds(), "bas1", "tbl1", "")
+	if err != nil || len(records) != 1 || records[0]["A"] != "x" || next != "p2" {
+		t.Fatalf("records = %v, %q, %v", records, next, err)
 	}
 }
