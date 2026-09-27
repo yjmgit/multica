@@ -15,8 +15,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/multica-ai/multica/server/internal/dispatch"
+	"github.com/multica-ai/multica/server/internal/events"
 	dbfx "github.com/multica-ai/multica/server/internal/testutil"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 // fakeToolClient records every ToolAPIClient call.
@@ -473,6 +475,59 @@ func TestFeishuToolsDB(t *testing.T) {
 		_ = otherUUID.Scan(other)
 		if _, err := f.tools.ScheduleAgentRun(ctx, f.chatScope, ScheduleAgentRunInput{AutopilotID: otherUUID, FireAt: time.Now().Add(time.Hour)}); !errors.Is(err, ErrToolInvalidInput) {
 			t.Fatalf("create_issue autopilot: err = %v", err)
+		}
+	})
+
+	t.Run("delegation relays each run's comment back to the chat once", func(t *testing.T) {
+		otherAgent := f.fx.Agent(t, "Helper agent", "")
+		issueID := f.fx.Issue(t, "清洗销售表", dbfx.Cols{"assignee_type": "agent", "assignee_id": otherAgent})
+		f.fx.Cleanup(t, `DELETE FROM channel_issue_relay WHERE issue_id = $1`, issueID)
+		var issueUUID pgtype.UUID
+		_ = issueUUID.Scan(issueID)
+		relay, err := f.tools.RegisterRelay(ctx, f.chatScope, issueUUID)
+		if err != nil || relay.ChatID != "oc_group" {
+			t.Fatalf("RegisterRelay = %+v, %v", relay, err)
+		}
+		if _, err := f.tools.RegisterRelay(ctx, f.bareScope, issueUUID); !errors.Is(err, ErrToolInvalidInput) {
+			t.Fatalf("relay without a Feishu chat: err = %v", err)
+		}
+
+		done := dbfx.Cols{"status": "completed", "completed_at": dbfx.Raw("now()"), "issue_id": issueID}
+		runID := f.fx.Task(t, otherAgent, done)
+		f.fx.Comment(t, issueID, "已去重 120 行，结果见附件。", dbfx.Cols{"author_type": "agent", "author_id": otherAgent, "source_task_id": runID})
+		completed := events.Event{Type: protocol.EventTaskCompleted, TaskID: runID}
+
+		f.client.sends = nil
+		if err := f.tools.relayRun(ctx, completed); err != nil {
+			t.Fatal(err)
+		}
+		if len(f.client.sends) != 1 {
+			t.Fatalf("sends = %d, want 1", len(f.client.sends))
+		}
+		got := f.client.sends[0]
+		if got.target.ChatID != "oc_group" || !strings.Contains(got.content, "已去重 120 行") || !strings.Contains(got.content, "Helper agent") || !strings.Contains(got.content, "ou_asker") {
+			t.Fatalf("relayed = %+v", got)
+		}
+		// The same run is never posted twice.
+		if err := f.tools.relayRun(ctx, completed); err != nil || len(f.client.sends) != 1 {
+			t.Fatalf("duplicate relay: sends = %d, err = %v", len(f.client.sends), err)
+		}
+
+		// A run that left no comment posts nothing.
+		quietID := f.fx.Task(t, otherAgent, done)
+		if err := f.tools.relayRun(ctx, events.Event{Type: protocol.EventTaskCompleted, TaskID: quietID}); err != nil || len(f.client.sends) != 1 {
+			t.Fatalf("quiet run: sends = %d, err = %v", len(f.client.sends), err)
+		}
+
+		// A failure waiting on an automatic retry is not reported; a final one is.
+		failedID := f.fx.Task(t, otherAgent, dbfx.Cols{"status": "failed", "completed_at": dbfx.Raw("now()"), "issue_id": issueID})
+		retrying := events.Event{Type: protocol.EventTaskFailed, TaskID: failedID, Payload: map[string]any{"retry_pending": true}}
+		if err := f.tools.relayRun(ctx, retrying); err != nil || len(f.client.sends) != 1 {
+			t.Fatalf("retry pending: sends = %d, err = %v", len(f.client.sends), err)
+		}
+		final := events.Event{Type: protocol.EventTaskFailed, TaskID: failedID, Payload: map[string]any{"retry_pending": false}}
+		if err := f.tools.relayRun(ctx, final); err != nil || len(f.client.sends) != 2 || !strings.Contains(f.client.sends[1].content, "失败") {
+			t.Fatalf("final failure: sends = %+v, err = %v", f.client.sends, err)
 		}
 	})
 

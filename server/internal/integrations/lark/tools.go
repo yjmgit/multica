@@ -29,6 +29,7 @@ type Tools struct {
 	credentials CredentialsResolver
 	client      ToolAPIClient
 	autopilots  AutopilotDispatcher
+	appURL      string
 	logger      *slog.Logger
 	now         func() time.Time
 }

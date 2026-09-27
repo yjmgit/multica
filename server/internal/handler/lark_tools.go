@@ -484,3 +484,33 @@ func (h *Handler) CancelWorkspaceLarkScheduled(w http.ResponseWriter, r *http.Re
 	}
 	writeJSON(w, http.StatusOK, lark.ScheduledMessageFromRow(row))
 }
+
+// RegisterLarkRelayRequest is the relay half of `multica lark delegate`: the
+// CLI has already created the issue assigned to the other agent.
+type RegisterLarkRelayRequest struct {
+	IssueID string `json:"issue_id"`
+}
+
+// RegisterLarkRelay serves the relay half of `multica lark delegate`: results
+// of runs on the issue are posted back to the calling task's Feishu chat.
+func (h *Handler) RegisterLarkRelay(w http.ResponseWriter, r *http.Request) {
+	scope, ok := h.larkToolScope(w, r)
+	if !ok {
+		return
+	}
+	var req RegisterLarkRelayRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	issueID, ok := parseUUIDOrBadRequest(w, req.IssueID, "issue_id")
+	if !ok {
+		return
+	}
+	relay, err := h.LarkTools.RegisterRelay(r.Context(), scope, issueID)
+	if err != nil {
+		writeLarkToolError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, relay)
+}

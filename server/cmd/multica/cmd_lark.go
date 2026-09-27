@@ -120,6 +120,23 @@ Autopilots page and "multica autopilot list/delete" manage it.`,
 	RunE: runLarkWakeup,
 }
 
+var larkDelegateCmd = &cobra.Command{
+	Use:   "delegate <instructions>",
+	Short: "Hand work to another agent; its result is posted back to this Feishu chat",
+	Long: `Hand work to another agent from a Feishu conversation. Feishu does not deliver
+one bot's messages to another bot, so the work goes through a Multica issue
+assigned to that agent. Each time a run on the issue finishes, the comment the
+run posted is sent back to this Feishu chat through your bot (@-mentioning the
+person who asked) — the other agent does not need a Feishu bot. A failed run is
+reported too.
+
+Write the instructions so the other agent can work without this conversation:
+include the goal, inputs and what to deliver.`,
+	Example: `  $ multica lark delegate --to "数据清洗助手" "清洗附件里的销售表：去重、统一日期格式，结果写成新的 CSV"`,
+	Args:    exactArgs(1),
+	RunE:    runLarkDelegate,
+}
+
 var larkChatsCmd = &cobra.Command{
 	Use:   "chats",
 	Short: "List the group chats the bot is in",
@@ -170,6 +187,9 @@ func init() {
 
 	addLarkWakeupFlags(larkWakeupCmd)
 
+	larkDelegateCmd.Flags().String("to", "", "Agent to hand the work to (name or ID, required)")
+	larkDelegateCmd.Flags().String("title", "", "Issue title (default: the start of the instructions)")
+
 	larkMembersCmd.Flags().String("chat", "", "chat_id (default: the current conversation)")
 
 	larkGroupCreateCmd.Flags().String("description", "", "Group description")
@@ -181,7 +201,7 @@ func init() {
 
 	larkScheduledCmd.AddCommand(larkScheduledListCmd, larkScheduledCancelCmd)
 	larkGroupCmd.AddCommand(larkGroupCreateCmd, larkGroupAddCmd)
-	larkCmd.AddCommand(larkContextCmd, larkSendCmd, larkScheduledCmd, larkDocCmd, larkChatsCmd, larkMembersCmd, larkGroupCmd, larkWakeupCmd)
+	larkCmd.AddCommand(larkContextCmd, larkSendCmd, larkScheduledCmd, larkDocCmd, larkChatsCmd, larkMembersCmd, larkGroupCmd, larkWakeupCmd, larkDelegateCmd)
 }
 
 // addLarkSendFlags registers the send flags; tests build a fresh command with it.
@@ -489,6 +509,80 @@ func runLarkWakeup(cmd *cobra.Command, args []string) error {
 		}
 		result["run_at"] = row["fire_at"]
 		result["scheduled_id"] = row["id"]
+	}
+	return cli.PrintJSON(os.Stdout, result)
+}
+
+// delegateDescription tells the assignee where its result goes.
+func delegateDescription(instructions string) string {
+	return strings.TrimSpace(instructions) + "\n\n---\n" +
+		"Delegated from a Feishu conversation. Post your result as a comment on this issue — the comment each run posts is relayed to that conversation automatically, so write it for the person who asked.\n"
+}
+
+func runLarkDelegate(cmd *cobra.Command, args []string) error {
+	instructions := strings.TrimSpace(args[0])
+	if instructions == "" {
+		return fmt.Errorf("the instructions are empty")
+	}
+	to, _ := cmd.Flags().GetString("to")
+	if strings.TrimSpace(to) == "" {
+		return fmt.Errorf("--to is required (agent name or ID)")
+	}
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
+	}
+	if _, err := requireWorkspaceID(cmd); err != nil {
+		return err
+	}
+	ctx, cancel := cli.APIContext(context.Background())
+	defer cancel()
+
+	var info struct {
+		CurrentChat *struct {
+			ChatID string `json:"chat_id"`
+		} `json:"current_chat"`
+	}
+	if err := client.GetJSON(ctx, "/api/lark/context", &info); err != nil {
+		return err
+	}
+	if info.CurrentChat == nil {
+		return fmt.Errorf("delegate only works from a task running in a Feishu conversation; use \"multica issue create --assignee\" otherwise")
+	}
+	agentID, err := resolveAgent(ctx, client, to)
+	if err != nil {
+		return fmt.Errorf("resolve agent: %w", err)
+	}
+	if agentID == client.AgentID {
+		return fmt.Errorf("--to names this agent itself; do the work directly instead")
+	}
+
+	title, _ := cmd.Flags().GetString("title")
+	if strings.TrimSpace(title) == "" {
+		title = strings.SplitN(instructions, "\n", 2)[0]
+	}
+	if r := []rune(title); len(r) > 60 {
+		title = string(r[:60]) + "…"
+	}
+	var issue map[string]any
+	if err := client.PostJSON(ctx, "/api/issues", map[string]any{
+		"title":         title,
+		"description":   delegateDescription(instructions),
+		"assignee_type": "agent",
+		"assignee_id":   agentID,
+	}, &issue); err != nil {
+		return fmt.Errorf("create issue: %w", err)
+	}
+	issueID := strVal(issue, "id")
+	result := map[string]any{"issue_id": issueID, "identifier": strVal(issue, "identifier"), "assignee_id": agentID}
+	var relay map[string]any
+	if err := client.PostJSON(ctx, "/api/lark/relays", map[string]any{"issue_id": issueID}, &relay); err != nil {
+		// The issue exists and the other agent will work on it; only the
+		// automatic post-back is missing.
+		result["relay_error"] = err.Error()
+		result["note"] = "The issue was created, but its result will not be posted back automatically; check the issue and relay it yourself."
+	} else {
+		result["relayed_to_chat"] = relay["chat_id"]
 	}
 	return cli.PrintJSON(os.Stdout, result)
 }

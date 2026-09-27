@@ -1,0 +1,1 @@
+DROP INDEX CONCURRENTLY IF EXISTS channel_issue_relay_issue_installation_uidx;

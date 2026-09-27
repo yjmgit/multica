@@ -401,6 +401,20 @@ type ChannelInstallation struct {
 	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
 }
 
+type ChannelIssueRelay struct {
+	ID              pgtype.UUID        `json:"id"`
+	WorkspaceID     pgtype.UUID        `json:"workspace_id"`
+	InstallationID  pgtype.UUID        `json:"installation_id"`
+	IssueID         pgtype.UUID        `json:"issue_id"`
+	ChatID          string             `json:"chat_id"`
+	ReplyMessageID  string             `json:"reply_message_id"`
+	ReplyInThread   bool               `json:"reply_in_thread"`
+	RequesterOpenID string             `json:"requester_open_id"`
+	LastTaskID      pgtype.UUID        `json:"last_task_id"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+}
+
 type ChannelMediaPendingObject struct {
 	StorageKey     string             `json:"storage_key"`
 	WorkspaceID    pgtype.UUID        `json:"workspace_id"`

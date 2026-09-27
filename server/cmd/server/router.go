@@ -624,6 +624,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					larkTools := lark.NewTools(queries, installSvc, toolClient, slog.Default())
 					h.LarkTools = larkTools
 					larkTools.SetAutopilotDispatcher(h.AutopilotService)
+					larkTools.SetAppURL(appURLFromEnv())
+					larkTools.RegisterIssueRelay(bus)
 					go larkTools.RunScheduler(context.Background())
 					if store != nil {
 						patcher.SetReplyAttachments(lark.ReplyAttachmentDeps{
@@ -2442,6 +2444,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Get("/api/lark/doc", h.ReadLarkDoc)
 			r.Post("/api/lark/docs", h.CreateLarkDoc)
 			r.Post("/api/lark/wakeups", h.ScheduleLarkWakeup)
+			r.Post("/api/lark/relays", h.RegisterLarkRelay)
 			r.Get("/api/lark/chats", h.ListLarkChats)
 			r.Get("/api/lark/members", h.ListLarkChatMembers)
 			r.Post("/api/lark/groups", h.CreateLarkGroup)

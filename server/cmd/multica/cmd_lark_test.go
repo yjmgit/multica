@@ -178,3 +178,67 @@ func TestRunLarkWakeupNeedsExactlyOneTime(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func newLarkDelegateTestCmd() *cobra.Command {
+	cmd := &cobra.Command{Use: "delegate"}
+	cmd.Flags().String("to", "", "")
+	cmd.Flags().String("title", "", "")
+	return cmd
+}
+
+// Delegating creates an issue for the other agent and registers the relay
+// that posts its results back to this Feishu chat.
+func TestRunLarkDelegateCreatesIssueAndRelay(t *testing.T) {
+	const helper = "11111111-2222-4333-8444-555555555555"
+	var issueBody, relayBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/lark/context":
+			_ = json.NewEncoder(w).Encode(map[string]any{"current_chat": map[string]any{"chat_id": "oc_g"}})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/issues":
+			_ = json.NewDecoder(r.Body).Decode(&issueBody)
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "issue-1", "identifier": "DATA-7"})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/lark/relays":
+			_ = json.NewDecoder(r.Body).Decode(&relayBody)
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(map[string]any{"issue_id": "issue-1", "chat_id": "oc_g"})
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+	setCLITestServerEnv(t, srv.URL)
+	t.Setenv("MULTICA_TOKEN", "mat_test-token")
+	t.Setenv("MULTICA_AGENT_ID", "agent-1")
+
+	cmd := newLarkDelegateTestCmd()
+	_ = cmd.Flags().Set("to", helper)
+	out, err := captureStdout(t, func() error { return runLarkDelegate(cmd, []string{"清洗销售表\n去重并统一日期格式"}) })
+	if err != nil {
+		t.Fatalf("runLarkDelegate: %v", err)
+	}
+	if issueBody["assignee_type"] != "agent" || issueBody["assignee_id"] != helper || issueBody["title"] != "清洗销售表" {
+		t.Fatalf("issue body = %v", issueBody)
+	}
+	if desc, _ := issueBody["description"].(string); !strings.Contains(desc, "relayed to that conversation") {
+		t.Fatalf("description = %q", desc)
+	}
+	if relayBody["issue_id"] != "issue-1" || !strings.Contains(out, "DATA-7") || !strings.Contains(out, "oc_g") {
+		t.Fatalf("relay body = %v, stdout = %q", relayBody, out)
+	}
+}
+
+func TestRunLarkDelegateRequiresFeishuChat(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"bot_open_id": "ou_bot"})
+	}))
+	defer srv.Close()
+	setCLITestServerEnv(t, srv.URL)
+	t.Setenv("MULTICA_TOKEN", "mat_test-token")
+	cmd := newLarkDelegateTestCmd()
+	_ = cmd.Flags().Set("to", "11111111-2222-4333-8444-555555555555")
+	if err := runLarkDelegate(cmd, []string{"x"}); err == nil || !strings.Contains(err.Error(), "Feishu conversation") {
+		t.Fatalf("err = %v", err)
+	}
+}
