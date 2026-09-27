@@ -389,7 +389,7 @@ type ScheduleLarkWakeupRequest struct {
 }
 
 // ScheduleLarkWakeup serves the one-off half of `multica lark wakeup`. The
-// run is started for the member the calling task acts for.
+// run is started for the member the calling task acts for (its originator).
 func (h *Handler) ScheduleLarkWakeup(w http.ResponseWriter, r *http.Request) {
 	scope, ok := h.larkToolScope(w, r)
 	if !ok {
@@ -413,13 +413,8 @@ func (h *Handler) ScheduleLarkWakeup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "pass delay or send_at")
 		return
 	}
-	actor, err := util.ParseUUID(r.Header.Get("X-User-ID"))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "missing task context")
-		return
-	}
 	row, err := h.LarkTools.ScheduleAgentRun(r.Context(), scope, lark.ScheduleAgentRunInput{
-		AutopilotID: autopilotID, ActorUserID: actor, FireAt: fireAt,
+		AutopilotID: autopilotID, FireAt: fireAt,
 	})
 	if err != nil {
 		writeLarkToolError(w, r, err)

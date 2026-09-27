@@ -680,7 +680,8 @@ func (c *httpAPIClient) CreateDocFromMarkdown(ctx context.Context, creds Install
 			Msg  string `json:"msg"`
 		}
 		path := "/open-apis/docx/v1/documents/" + url.PathEscape(docID) + "/blocks/" + url.PathEscape(docID) + "/descendant?document_revision_id=-1"
-		insert := map[string]any{"children_id": batch.children, "index": -1, "descendants": batch.blocks}
+		// No index: Lark appends to the end of the document.
+		insert := map[string]any{"children_id": batch.children, "descendants": batch.blocks}
 		if err := c.doAuthedJSON(ctx, creds, http.MethodPost, path, insert, &resp); err != nil {
 			return docID, fmt.Errorf("lark http client: insert document blocks: %w", err)
 		}

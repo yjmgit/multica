@@ -18,11 +18,12 @@ export const larkInstallationsOptions = (wsId: string) =>
   });
 
 /** Pending Feishu messages and one-off wake-ups agents scheduled. There is
- * no realtime event for them; the list refetches on focus and after a
- * cancel, and each row carries its own send time. */
+ * no realtime event for them, so the list also polls: rows the scheduler
+ * has sent drop off within a minute instead of waiting for a focus change. */
 export const larkScheduledOptions = (wsId: string) =>
   queryOptions({
     queryKey: larkKeys.scheduled(wsId),
     queryFn: () => api.listLarkScheduled(wsId),
     enabled: !!wsId,
+    refetchInterval: 60_000,
   });

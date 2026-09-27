@@ -49,7 +49,7 @@ this task has ended. Use --mention-requester to @ the person who asked.`,
   # Send a report file to the current conversation
   $ multica lark send "本周报告见附件" --file ./report.pdf
 
-  # Post to a specific group at 9:00 Beijing time
+  # Post to a specific group at 9:00 Singapore time
   $ multica lark send --chat oc_xxx --at 2026-09-27T09:00:00+08:00 "早会开始"`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: runLarkSend,
@@ -111,7 +111,7 @@ Unlike "send --in", which only posts fixed text, a wake-up is a real agent run:
 use it for "every morning at 9 summarize ...", "tomorrow at 3pm check ... and
 tell me". It is stored as a run_only autopilot, so it shows up on the web
 Autopilots page and "multica autopilot list/delete" manage it.`,
-	Example: `  # Every weekday at 9:00 Beijing time
+	Example: `  # Every weekday at 9:00 Singapore time
   $ multica lark wakeup --cron "0 9 * * 1-5" "汇总昨天群里讨论的要点"
 
   # Once, in 2 hours, and @ the person who asked
@@ -201,7 +201,7 @@ func addLarkWakeupFlags(cmd *cobra.Command) {
 	cmd.Flags().String("in", "", "Run once after this delay, e.g. 30m, 2h")
 	cmd.Flags().String("at", "", "Run once at this time (RFC 3339, e.g. 2026-09-28T15:00:00+08:00)")
 	cmd.Flags().String("cron", "", "Run on this cron schedule, e.g. \"0 9 * * 1-5\"")
-	cmd.Flags().String("timezone", "Asia/Shanghai", "IANA timezone for --cron")
+	cmd.Flags().String("timezone", "Asia/Singapore", "IANA timezone for --cron")
 	cmd.Flags().String("title", "", "Title shown on the Autopilots page (default: the instructions)")
 	cmd.Flags().String("chat", "", "chat_id to post the result to (default: the current conversation)")
 	cmd.Flags().String("user", "", "open_id to post the result to as a direct message")

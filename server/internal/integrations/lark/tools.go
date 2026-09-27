@@ -440,12 +440,10 @@ const (
 	scheduledKindAgentRun = "agent_run"
 )
 
-// ScheduleAgentRunInput is a one-off wake-up: start AutopilotID at FireAt on
-// behalf of ActorUserID. The autopilot must be a run_only autopilot assigned
-// to the calling agent.
+// ScheduleAgentRunInput is a one-off wake-up: start AutopilotID at FireAt.
+// The autopilot must be a run_only autopilot assigned to the calling agent.
 type ScheduleAgentRunInput struct {
 	AutopilotID pgtype.UUID
-	ActorUserID pgtype.UUID
 	FireAt      time.Time
 }
 
@@ -461,8 +459,15 @@ func (t *Tools) ScheduleAgentRun(ctx context.Context, scope ToolScope, in Schedu
 	if in.FireAt.Sub(now) > maxScheduleAhead {
 		return ScheduledMessage{}, invalidInput("the wake-up time must be within a year")
 	}
-	if !in.ActorUserID.Valid {
-		return ScheduledMessage{}, invalidInput("no member to run the wake-up for")
+	// The run acts for the member the calling task acts for — the same
+	// originator the autopilot endpoints used to create this autopilot — not
+	// the task token's user, which is the runtime owner.
+	task, err := t.queries.GetAgentTask(ctx, scope.TaskID)
+	if err != nil {
+		return ScheduledMessage{}, fmt.Errorf("load task: %w", err)
+	}
+	if !task.OriginatorUserID.Valid {
+		return ScheduledMessage{}, invalidInput("this task does not act for a member, so it cannot schedule a wake-up")
 	}
 	ap, err := t.queries.GetAutopilot(ctx, in.AutopilotID)
 	if err != nil {
@@ -490,7 +495,7 @@ func (t *Tools) ScheduleAgentRun(ctx context.Context, scope ToolScope, in Schedu
 		FireAt:         pgtype.Timestamptz{Time: in.FireAt, Valid: true},
 		Kind:           scheduledKindAgentRun,
 		AutopilotID:    ap.ID,
-		ActorUserID:    in.ActorUserID,
+		ActorUserID:    task.OriginatorUserID,
 	}
 	if tc.current != nil {
 		params.ReceiveID = tc.current.ChatID

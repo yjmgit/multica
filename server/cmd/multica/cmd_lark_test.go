@@ -129,7 +129,7 @@ func TestRunLarkWakeupRecurringCreatesAutopilotAndTrigger(t *testing.T) {
 	if !strings.HasPrefix(desc, "汇总昨天的讨论") || !strings.Contains(desc, "multica lark send --chat oc_g --mention ou_asker") {
 		t.Fatalf("description = %q", desc)
 	}
-	if trigger["kind"] != "schedule" || trigger["cron_expression"] != "0 9 * * 1-5" || trigger["timezone"] != "Asia/Shanghai" {
+	if trigger["kind"] != "schedule" || trigger["cron_expression"] != "0 9 * * 1-5" || trigger["timezone"] != "Asia/Singapore" {
 		t.Fatalf("trigger body = %v", trigger)
 	}
 	if !strings.Contains(out, "ap-1") || !strings.Contains(out, "2026-09-28T01:00:00Z") {

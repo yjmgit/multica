@@ -211,7 +211,7 @@ func newToolsFixture(t *testing.T) toolsFixture {
 		"chat_session_id": sessionID, "installation_id": installationID, "channel_type": channelTypeFeishu,
 		"channel_chat_id": "oc_group", "chat_type": "group",
 	})
-	chatTaskID := fx.Task(t, agentID, dbfx.Cols{"status": "completed", "completed_at": dbfx.Raw("now()")})
+	chatTaskID := fx.Task(t, agentID, dbfx.Cols{"status": "completed", "completed_at": dbfx.Raw("now()"), "originator_user_id": fx.UserID, "accountable_user_id": fx.UserID})
 	fx.InsertNoID(t, "channel_task_delivery", dbfx.Cols{
 		"task_id": chatTaskID, "binding_id": bindingID, "installation_id": installationID,
 		"channel_type": channelTypeFeishu, "channel_chat_id": "oc_group", "chat_type": "group",
@@ -444,7 +444,7 @@ func TestFeishuToolsDB(t *testing.T) {
 		var apUUID, actor pgtype.UUID
 		_ = apUUID.Scan(apID)
 		_ = actor.Scan(f.fx.UserID)
-		row, err := f.tools.ScheduleAgentRun(ctx, f.chatScope, ScheduleAgentRunInput{AutopilotID: apUUID, ActorUserID: actor, FireAt: time.Now().Add(time.Hour)})
+		row, err := f.tools.ScheduleAgentRun(ctx, f.chatScope, ScheduleAgentRunInput{AutopilotID: apUUID, FireAt: time.Now().Add(time.Hour)})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -471,7 +471,7 @@ func TestFeishuToolsDB(t *testing.T) {
 		})
 		var otherUUID pgtype.UUID
 		_ = otherUUID.Scan(other)
-		if _, err := f.tools.ScheduleAgentRun(ctx, f.chatScope, ScheduleAgentRunInput{AutopilotID: otherUUID, ActorUserID: actor, FireAt: time.Now().Add(time.Hour)}); !errors.Is(err, ErrToolInvalidInput) {
+		if _, err := f.tools.ScheduleAgentRun(ctx, f.chatScope, ScheduleAgentRunInput{AutopilotID: otherUUID, FireAt: time.Now().Add(time.Hour)}); !errors.Is(err, ErrToolInvalidInput) {
 			t.Fatalf("create_issue autopilot: err = %v", err)
 		}
 	})
