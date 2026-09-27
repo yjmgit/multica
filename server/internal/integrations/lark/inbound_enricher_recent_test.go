@@ -399,7 +399,8 @@ func TestEnrichRecentContextResolvesNames(t *testing.T) {
 
 // TestEnrichRecentContextNameFallback pins the mixed case: a sender whose
 // name resolved shows the name; one that did not falls back to positional
-// "User N"; and an unresolved trigger sender leaves the core unlabeled.
+// "User N"; and an unresolved trigger sender is labeled by open_id so
+// different people stay distinguishable.
 func TestEnrichRecentContextNameFallback(t *testing.T) {
 	t.Parallel()
 	fake := newEnricherFake()
@@ -427,7 +428,7 @@ func TestEnrichRecentContextNameFallback(t *testing.T) {
 [User 1]: 明天发布
 </recent_context>
 
-总结一下`
+[Feishu user ou_charlie]: 总结一下`
 	if out.Body != want {
 		t.Errorf("body\n got = %q\nwant = %q", out.Body, want)
 	}

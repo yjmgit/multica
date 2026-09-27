@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/multica-ai/multica/server/internal/integrations/channel/engine"
 )
@@ -91,6 +93,7 @@ type inboundEnricher struct {
 	maxForwardChildren int
 	recentContextSize  int
 	logger             *slog.Logger
+	senderNames        *senderNameCache
 }
 
 // NewInboundEnricher builds an Enricher backed by the given Lark API
@@ -109,6 +112,7 @@ func NewInboundEnricher(client APIClient, cfg InboundEnricherConfig) Enricher {
 		maxForwardChildren: cfg.MaxForwardChildren,
 		recentContextSize:  cfg.RecentContextSize,
 		logger:             cfg.Logger,
+		senderNames:        newSenderNameCache(senderNameCacheTTL),
 	}
 }
 
@@ -171,14 +175,17 @@ func (e *inboundEnricher) Enrich(ctx context.Context, msg InboundMessage, creds 
 
 	isForward := msg.MessageType == larkMsgTypeMergeForward
 	wantRecent := !e.groupMembers.Enabled(msg.AppID) && !startChat && e.recentContextSize > 0 && msg.ChatType == ChatTypeGroup && msg.AddressedToBot
-	if msg.ParentID == "" && !isForward && !wantRecent {
-		// Nothing to expand and no group prefetch wanted — no network call.
-		return msg
-	}
 	// If the transport isn't wired (stub client on a deployment without
 	// a Lark app), skip rather than stamp every reply with a fetch
 	// error. Body stays whatever the decoder produced.
 	if e.client == nil || !e.client.IsConfigured() {
+		return msg
+	}
+	if msg.ParentID == "" && !isForward && !wantRecent {
+		// Nothing to expand: only label who is speaking. Anyone can reach
+		// the bot and unbound senders run as the installer, so without the
+		// label the agent cannot tell one person from another.
+		msg.Body = e.labelSender(ctx, creds, msg, msg.Body)
 		return msg
 	}
 
@@ -218,6 +225,9 @@ func (e *inboundEnricher) Enrich(ctx context.Context, msg InboundMessage, creds 
 			ids = append(ids, string(msg.SenderOpenID))
 		}
 		names = e.resolveNames(ctx, creds, ids)
+		if name := names[string(msg.SenderOpenID)]; name != "" {
+			e.senderNames.put(string(msg.SenderOpenID), name)
+		}
 	}
 
 	// Phase 3 — render broadest-to-narrowest with the complete name map.
@@ -247,13 +257,9 @@ func (e *inboundEnricher) Enrich(ctx context.Context, msg InboundMessage, creds 
 			core = e.renderForwardedItems(forwardItems, msg.MessageID, names)
 		}
 	} else {
-		core = msg.Body
-		// Label the user's own message with their real name so the agent
-		// knows WHO @-mentioned it — not just what they said. Only when the
-		// name resolved (group path); otherwise the body passes through.
-		if name := names[string(msg.SenderOpenID)]; name != "" {
-			core = fmt.Sprintf("[%s]: %s", name, msg.Body)
-		}
+		// Label the user's own message so the agent knows WHO wrote it —
+		// not just what they said.
+		core = e.labelSender(ctx, creds, msg, msg.Body)
 	}
 	if b.Len() > 0 && core != "" {
 		b.WriteString("\n\n")
@@ -262,6 +268,72 @@ func (e *inboundEnricher) Enrich(ctx context.Context, msg InboundMessage, creds 
 
 	msg.Body = b.String()
 	return msg
+}
+
+// senderNameCacheTTL bounds how stale a cached display name may be. Names
+// rarely change; the cache only saves one Contact call per message.
+const senderNameCacheTTL = 30 * time.Minute
+
+// labelSender prefixes body with the sender's display name, e.g.
+// "[Alice]: hi". When the name cannot be resolved (the app lacks the
+// Contact scope, or the lookup failed) it falls back to the open_id so
+// different people stay distinguishable. An empty body or unknown sender
+// passes through.
+func (e *inboundEnricher) labelSender(ctx context.Context, creds InstallationCredentials, msg InboundMessage, body string) string {
+	openID := string(msg.SenderOpenID)
+	if body == "" || openID == "" {
+		return body
+	}
+	name, ok := e.senderNames.get(openID)
+	if !ok {
+		if names := e.resolveNames(ctx, creds, []string{openID}); names[openID] != "" {
+			name = names[openID]
+			e.senderNames.put(openID, name)
+		}
+	}
+	if name == "" {
+		name = "Feishu user " + openID
+	}
+	return fmt.Sprintf("[%s]: %s", name, body)
+}
+
+// senderNameCache is a small TTL cache of open_id -> display name.
+type senderNameCache struct {
+	mu      sync.Mutex
+	ttl     time.Duration
+	now     func() time.Time
+	entries map[string]senderNameEntry
+}
+
+type senderNameEntry struct {
+	name    string
+	expires time.Time
+}
+
+// maxSenderNameCacheEntries bounds memory; the cache is simply reset when full.
+const maxSenderNameCacheEntries = 10000
+
+func newSenderNameCache(ttl time.Duration) *senderNameCache {
+	return &senderNameCache{ttl: ttl, now: time.Now, entries: map[string]senderNameEntry{}}
+}
+
+func (c *senderNameCache) get(openID string) (string, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e, ok := c.entries[openID]
+	if !ok || c.now().After(e.expires) {
+		return "", false
+	}
+	return e.name, true
+}
+
+func (c *senderNameCache) put(openID, name string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.entries) >= maxSenderNameCacheEntries {
+		c.entries = map[string]senderNameEntry{}
+	}
+	c.entries[openID] = senderNameEntry{name: name, expires: c.now().Add(c.ttl)}
 }
 
 // senderOpenIDs returns the distinct non-app sender open_ids across the

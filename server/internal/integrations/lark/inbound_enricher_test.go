@@ -542,3 +542,42 @@ func TestEnrichForwardMarksSelectedContext(t *testing.T) {
 		}
 	}
 }
+
+// Anyone can reach the bot and unbound senders run as the installer, so even a
+// plain private message is labeled with who sent it.
+func TestEnrichLabelsPlainPrivateMessageSender(t *testing.T) {
+	t.Parallel()
+	fake := newEnricherFake()
+	fake.userNames = map[string]string{"ou_wang": "王五"}
+	e := NewInboundEnricher(fake, InboundEnricherConfig{})
+	in := InboundMessage{MessageType: "text", MessageID: "om_1", ChatID: "oc_p2p", ChatType: ChatTypeP2P, SenderOpenID: "ou_wang", Body: "帮我查下天气"}
+
+	out := e.Enrich(context.Background(), in, InstallationCredentials{AppID: "a", AppSecret: "s"})
+	if out.Body != "[王五]: 帮我查下天气" {
+		t.Fatalf("body = %q", out.Body)
+	}
+	// The name is cached: a second message makes no Contact call.
+	in.MessageID, in.Body = "om_2", "谢谢"
+	out = e.Enrich(context.Background(), in, InstallationCredentials{AppID: "a", AppSecret: "s"})
+	if out.Body != "[王五]: 谢谢" || len(fake.userCalls) != 1 {
+		t.Fatalf("body = %q, contact calls = %d", out.Body, len(fake.userCalls))
+	}
+	if len(fake.calls) != 0 || len(fake.listCalls) != 0 {
+		t.Fatalf("plain message fetched messages: get=%v list=%v", fake.calls, fake.listCalls)
+	}
+}
+
+// Without the Contact scope the open_id still tells senders apart.
+func TestEnrichLabelsSenderByOpenIDWhenNameUnavailable(t *testing.T) {
+	t.Parallel()
+	fake := newEnricherFake()
+	fake.usersErr = errors.New("no contact scope")
+	in := InboundMessage{MessageType: "text", MessageID: "om_1", ChatID: "oc_g", ChatType: ChatTypeGroup, AddressedToBot: true, SenderOpenID: "ou_x", Body: "hi", CommandBody: "hi"}
+	out := enrich(t, fake, in, InboundEnricherConfig{})
+	if out.Body != "[Feishu user ou_x]: hi" {
+		t.Fatalf("body = %q", out.Body)
+	}
+	if out.CommandBody != "hi" {
+		t.Fatalf("command body must stay the user's own text, got %q", out.CommandBody)
+	}
+}
