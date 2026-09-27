@@ -20,9 +20,13 @@ import { useLocale, useT } from "../../i18n";
 export function LarkScheduledSection({
   wsId,
   canManageWorkspace,
+  hideHeader = false,
 }: {
   wsId: string;
   canManageWorkspace: boolean;
+  /** Omit the heading and hint where the surrounding tab already names
+   * the list (the Autopilots page). */
+  hideHeader?: boolean;
 }) {
   const { t } = useT("settings");
   const { data: scheduled = [] } = useQuery(larkScheduledOptions(wsId));
@@ -47,10 +51,12 @@ export function LarkScheduledSection({
 
   return (
     <section className="space-y-3">
-      <div className="space-y-1">
-        <h2 className="text-body font-semibold">{t(($) => $.lark.scheduled_title)}</h2>
-        <p className="text-caption text-muted-foreground">{t(($) => $.lark.scheduled_recurring_hint)}</p>
-      </div>
+      {!hideHeader && (
+        <div className="space-y-1">
+          <h2 className="text-body font-semibold">{t(($) => $.lark.scheduled_title)}</h2>
+          <p className="text-caption text-muted-foreground">{t(($) => $.lark.scheduled_recurring_hint)}</p>
+        </div>
+      )}
       <Card>
         <CardContent className="divide-y">
           {scheduled.map((item) => (

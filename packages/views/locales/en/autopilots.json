@@ -474,6 +474,11 @@
       "deleting": "Deleting…"
     }
   },
+  "feishu_scheduled": {
+    "title": "Feishu",
+    "empty_title": "Nothing scheduled in Feishu",
+    "empty_description": "Ask the agent in Feishu for a reminder, e.g. “remind me in 5 minutes to hand in my homework”. Pending reminders show here until they are sent."
+  },
   "wakeups": {
     "title": "Issue wakeups",
     "scope": "Scope",

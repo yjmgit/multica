@@ -471,6 +471,11 @@
       "deleting": "削除中…"
     }
   },
+  "feishu_scheduled": {
+    "title": "Feishu 予約",
+    "empty_title": "Feishu の予約はありません",
+    "empty_description": "Feishu でエージェントにリマインダーを頼めます（例：「5 分後に宿題の提出をリマインドして」）。送信前のリマインダーはここに表示されます。"
+  },
   "wakeups": {
     "title": "タスクのウェイクアップ",
     "scope": "範囲",

@@ -471,6 +471,11 @@
       "deleting": "삭제 중…"
     }
   },
+  "feishu_scheduled": {
+    "title": "Feishu 예약",
+    "empty_title": "예약된 Feishu 알림이 없습니다",
+    "empty_description": "Feishu에서 에이전트에게 알림을 요청하세요(예: “5분 후에 과제 제출 알려줘”). 보내기 전의 알림이 여기에 표시됩니다."
+  },
   "wakeups": {
     "title": "작업 깨우기",
     "scope": "범위",

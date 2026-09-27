@@ -19,6 +19,7 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { autopilotListOptions } from "@multica/core/autopilots/queries";
+import { larkInstallationsOptions } from "@multica/core/lark";
 import {
   useAutopilotsViewStore,
   AUTOPILOT_DEFAULT_HIDDEN_COLUMNS,
@@ -51,6 +52,7 @@ import {
   TabsContent,
 } from "@multica/ui/components/ui/tabs";
 import { WorkspaceWakeups } from "./workspace-wakeups";
+import { FeishuScheduledTab } from "./feishu-scheduled-tab";
 import { useNavigation, useRowLink } from "../../navigation";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { formatInTimeZone } from "../../common/format-in-time-zone";
@@ -621,13 +623,17 @@ function LoadingSkeleton() {
 
 export function AutopilotsPage() {
   const navigation = useNavigation();
+  const tabParam = navigation.searchParams.get("tab");
   const tab =
-    navigation.searchParams.get("tab") === "wakeups" ? "wakeups" : "autopilots";
+    tabParam === "wakeups" || tabParam === "feishu" ? tabParam : "autopilots";
   const { t } = useT("autopilots");
   const locale = useLocale();
   const wsId = useWorkspaceId();
   const wsPaths = useWorkspacePaths();
   const rowLink = useRowLink();
+  // The Feishu tab only appears for workspaces with a connected Feishu bot.
+  const { data: larkListing } = useQuery(larkInstallationsOptions(wsId));
+  const hasFeishuBot = (larkListing?.installations ?? []).some((i) => i.status === "active");
   const {
     data: autopilots = [],
     isLoading,
@@ -796,7 +802,7 @@ export function AutopilotsPage() {
       value={tab}
       onValueChange={(value) => {
         const params = new URLSearchParams(navigation.searchParams);
-        if (value === "wakeups") params.set("tab", "wakeups");
+        if (value === "wakeups" || value === "feishu") params.set("tab", value);
         else params.delete("tab");
         navigation.replace(
           `${navigation.pathname}${params.size ? `?${params}` : ""}${navigation.hash}`,
@@ -823,8 +829,17 @@ export function AutopilotsPage() {
         <TabsList variant="line" aria-label={t(($) => $.page.title)}>
           <TabsTrigger value="autopilots">{t(($) => $.page.title)}</TabsTrigger>
           <TabsTrigger value="wakeups">{t(($) => $.wakeups.title)}</TabsTrigger>
+          {(hasFeishuBot || tab === "feishu") && (
+            <TabsTrigger value="feishu">{t(($) => $.feishu_scheduled.title)}</TabsTrigger>
+          )}
         </TabsList>
       </div>
+      <TabsContent
+        value="feishu"
+        className="flex min-h-0 flex-col data-hidden:hidden"
+      >
+        {tab === "feishu" && <FeishuScheduledTab key={wsId} wsId={wsId} />}
+      </TabsContent>
       <TabsContent
         value="wakeups"
         className="flex min-h-0 flex-col data-hidden:hidden"

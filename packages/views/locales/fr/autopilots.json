@@ -474,6 +474,11 @@
       "deleting": "Suppression…"
     }
   },
+  "feishu_scheduled": {
+    "title": "Feishu",
+    "empty_title": "Rien de programmé dans Feishu",
+    "empty_description": "Demandez un rappel à l’agent dans Feishu, par exemple « rappelle-moi dans 5 minutes de rendre mon devoir ». Les rappels en attente s’affichent ici jusqu’à leur envoi."
+  },
   "wakeups": {
     "title": "Réveils de tâches",
     "scope": "Périmètre",

@@ -471,6 +471,11 @@
       "deleting": "删除中…"
     }
   },
+  "feishu_scheduled": {
+    "title": "飞书定时",
+    "empty_title": "没有待发送的飞书定时",
+    "empty_description": "在飞书里让智能体提醒你，比如「5 分钟后提醒我交作业」。待发送的提醒会显示在这里，发出后自动消失。"
+  },
   "wakeups": {
     "title": "任务唤醒",
     "scope": "范围",
