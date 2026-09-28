@@ -2538,7 +2538,6 @@ func buildLarkConnector(installSvc *lark.InstallationService, apiClient lark.API
 	// connector's resolved credentials and runs under the connector's
 	// EnrichTimeout so it cannot overrun the Lark long-conn ACK budget.
 	enricher := lark.NewInboundEnricher(apiClient, lark.InboundEnricherConfig{
-		GroupMembers:      groupMembers,
 		RecentContextSize: lark.DefaultRecentContextSize,
 		Logger:            slog.Default(),
 	})

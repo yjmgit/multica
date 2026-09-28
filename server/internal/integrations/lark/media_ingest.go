@@ -12,6 +12,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 
@@ -282,6 +283,52 @@ func quotedMediaFromItems(items []LarkMessage) []QuotedMediaResource {
 		}
 	}
 	return out
+}
+
+// recentMediaWindow bounds how long before the @-mention a sender's own
+// file still counts as part of the request.
+const recentMediaWindow = 30 * time.Minute
+
+// recentMediaFromSender picks, from the recent group window, the media
+// messages the addressing sender posted within recentMediaWindow of the
+// @-mention. Other members' files stay text-only context.
+func recentMediaFromSender(items []LarkMessage, msg InboundMessage) []LarkMessage {
+	sender := string(msg.SenderOpenID)
+	trigger := parseLarkMillis(msg.CreateTime)
+	if sender == "" || trigger == 0 {
+		return nil
+	}
+	cutoff := trigger - recentMediaWindow.Milliseconds()
+	var out []LarkMessage
+	for _, it := range items {
+		if it.SenderID != sender || it.SenderType != "user" {
+			continue
+		}
+		if at := parseLarkMillis(it.CreateTime); at < cutoff || at > trigger {
+			continue
+		}
+		out = append(out, it)
+	}
+	return out
+}
+
+// appendMediaOnce appends more to have, skipping resources already present,
+// up to maxQuotedMediaResources.
+func appendMediaOnce(have, more []QuotedMediaResource) []QuotedMediaResource {
+	seen := make(map[string]bool, len(have))
+	for _, q := range have {
+		seen[q.MessageID+"\x00"+q.Key] = true
+	}
+	for _, q := range more {
+		if len(have) >= maxQuotedMediaResources {
+			break
+		}
+		if k := q.MessageID + "\x00" + q.Key; !seen[k] {
+			seen[k] = true
+			have = append(have, q)
+		}
+	}
+	return have
 }
 
 func ownMediaResources(lm InboundMessage) []larkMediaResource {

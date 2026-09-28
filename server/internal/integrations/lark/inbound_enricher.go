@@ -71,7 +71,6 @@ type Enricher interface {
 
 // InboundEnricherConfig tunes the enricher. All fields default.
 type InboundEnricherConfig struct {
-	GroupMembers GroupMemberPolicy
 	// MaxForwardChildren caps inlined forward children. <=0 uses
 	// defaultMaxForwardChildren.
 	MaxForwardChildren int
@@ -88,7 +87,6 @@ type InboundEnricherConfig struct {
 }
 
 type inboundEnricher struct {
-	groupMembers       GroupMemberPolicy
 	client             APIClient
 	maxForwardChildren int
 	recentContextSize  int
@@ -107,7 +105,6 @@ func NewInboundEnricher(client APIClient, cfg InboundEnricherConfig) Enricher {
 		cfg.Logger = slog.Default()
 	}
 	return &inboundEnricher{
-		groupMembers:       cfg.GroupMembers,
 		client:             client,
 		maxForwardChildren: cfg.MaxForwardChildren,
 		recentContextSize:  cfg.RecentContextSize,
@@ -174,7 +171,7 @@ func (e *inboundEnricher) Enrich(ctx context.Context, msg InboundMessage, creds 
 	}
 
 	isForward := msg.MessageType == larkMsgTypeMergeForward
-	wantRecent := !e.groupMembers.Enabled(msg.AppID) && !startChat && e.recentContextSize > 0 && msg.ChatType == ChatTypeGroup && msg.AddressedToBot
+	wantRecent := !startChat && e.recentContextSize > 0 && msg.ChatType == ChatTypeGroup && msg.AddressedToBot
 	// If the transport isn't wired (stub client on a deployment without
 	// a Lark app), skip rather than stamp every reply with a fetch
 	// error. Body stays whatever the decoder produced.
@@ -209,6 +206,11 @@ func (e *inboundEnricher) Enrich(ctx context.Context, msg InboundMessage, creds 
 			// own, so quoting a file hands the agent the file, not "[File]".
 			msg.QuotedMedia = quotedMediaFromItems(quotedItems)
 		}
+	}
+	if recentErr == nil {
+		// "Here's the file" then "@bot review it" as two messages: attach
+		// the files the sender posted shortly before addressing the Bot.
+		msg.QuotedMedia = appendMediaOnce(msg.QuotedMedia, quotedMediaFromItems(recentMediaFromSender(recentItems, msg)))
 	}
 	var forwardItems []LarkMessage
 	var forwardErr error

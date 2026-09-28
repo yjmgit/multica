@@ -6,6 +6,7 @@ import (
 	"errors"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/pkg/protocol"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -102,20 +103,34 @@ func TestGroupMemberDecoderBoundary(t *testing.T) {
 	}
 }
 
-func TestGroupMemberEnrichmentOnlyExplicitContext(t *testing.T) {
-	p, _ := ParseGroupMemberPolicy("cli_test", "2h")
-	fake := newEnricherFake()
-	fake.byChat["oc_a"] = []LarkMessage{textMsg("om_other", "ou_b", "OTHER_MEMBER_HISTORY", "1")}
-	fake.byID["om_quote"] = []LarkMessage{textMsg("om_quote", "ou_b", "EXPLICIT_QUOTE", "1")}
-	msg := InboundMessage{AppID: "cli_test", ChatID: "oc_a", ChatType: ChatTypeGroup, AddressedToBot: true, Body: "question", SenderOpenID: "ou_a"}
-	out := enrich(t, fake, msg, InboundEnricherConfig{GroupMembers: p, RecentContextSize: 10})
-	if len(fake.listCalls) != 0 || strings.Contains(out.Body, "OTHER_MEMBER_HISTORY") {
-		t.Fatal("group history leaked")
+// TestEnrichGroupRecentContextAttachesSendersFiles: an @-mention in a group
+// carries the recent group history, plus the files the SAME sender posted
+// shortly before — "here's the spec" then "@bot review it" works without a
+// quote. Other members' files and stale files stay text-only.
+func TestEnrichGroupRecentContextAttachesSendersFiles(t *testing.T) {
+	fileMsg := func(id, sender, key, createTime string) LarkMessage {
+		return LarkMessage{MessageID: id, MessageType: "file", SenderID: sender, SenderType: "user", CreateTime: createTime,
+			Content: `{"file_key":"` + key + `","file_name":"` + key + `.md"}`}
 	}
-	msg.ParentID = "om_quote"
-	out = enrich(t, fake, msg, InboundEnricherConfig{GroupMembers: p, RecentContextSize: 10})
-	if !strings.Contains(out.Body, "EXPLICIT_QUOTE") || len(fake.listCalls) != 0 {
-		t.Fatal("explicit context lost or group history fetched")
+	const now = int64(1_700_000_000_000)
+	ms := func(minutesAgo int64) string { return strconv.FormatInt(now-minutesAgo*60_000, 10) }
+	fake := newEnricherFake()
+	fake.byChat["oc_a"] = []LarkMessage{
+		fileMsg("om_old", "ou_a", "stale", ms(45)),
+		textMsg("om_other", "ou_b", "OTHER_MEMBER_HISTORY", ms(20)),
+		fileMsg("om_b_file", "ou_b", "theirs", ms(10)),
+		fileMsg("om_a_file", "ou_a", "spec", ms(2)),
+	}
+	msg := InboundMessage{AppID: "cli_test", MessageID: "om_ask", ChatID: "oc_a", ChatType: ChatTypeGroup, AddressedToBot: true,
+		Body: "review it", SenderOpenID: "ou_a", CreateTime: strconv.FormatInt(now, 10)}
+
+	out := enrich(t, fake, msg, InboundEnricherConfig{RecentContextSize: 10})
+
+	if !strings.Contains(out.Body, "OTHER_MEMBER_HISTORY") {
+		t.Fatalf("recent group history missing:\n%s", out.Body)
+	}
+	if len(out.QuotedMedia) != 1 || out.QuotedMedia[0].MessageID != "om_a_file" || out.QuotedMedia[0].Key != "spec" {
+		t.Fatalf("QuotedMedia = %+v, want only the sender's recent spec", out.QuotedMedia)
 	}
 }
 

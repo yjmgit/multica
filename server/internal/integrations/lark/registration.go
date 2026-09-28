@@ -135,6 +135,7 @@ type RegistrationConfig struct {
 // writing docs, sheets, bases and wiki pages.
 var DefaultExtraScopes = []string{
 	"im:message:send_as_bot",
+	"im:message.group_msg",
 	"im:resource",
 	"im:chat",
 	"contact:user.base:readonly",
