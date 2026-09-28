@@ -231,7 +231,60 @@ type larkMediaResource struct {
 	messageID string
 }
 
+// maxQuotedMediaResources bounds how many quoted/forwarded resources one
+// message pulls in, so quoting a large forwarded bundle cannot fan out into
+// dozens of downloads.
+const maxQuotedMediaResources = 10
+
+// mediaResourcesFromMessage returns the message's own resources followed by
+// those of the message it quotes or forwards.
 func mediaResourcesFromMessage(lm InboundMessage) []larkMediaResource {
+	out := ownMediaResources(lm)
+	for i, q := range lm.QuotedMedia {
+		if i >= maxQuotedMediaResources {
+			break
+		}
+		if q.Key == "" || q.MessageID == "" {
+			continue
+		}
+		out = append(out, larkMediaResource{
+			key:       q.Key,
+			kind:      channel.MsgType(q.Kind),
+			fetchType: q.FetchType,
+			filename:  q.Filename,
+			mimeType:  q.MimeType,
+			sizeBytes: q.SizeBytes,
+			messageID: q.MessageID,
+		})
+	}
+	return out
+}
+
+// quotedMediaFromItems collects the downloadable resources of fetched
+// (quoted) messages. Bot-sent messages are included: quoting
+// the bot's own file reply is a legitimate "look at this again".
+func quotedMediaFromItems(items []LarkMessage) []QuotedMediaResource {
+	var out []QuotedMediaResource
+	for _, it := range items {
+		// Feishu cannot download the resources of a merge_forward's
+		// children, so only top-level messages contribute.
+		if it.Deleted || it.UpperMessageID != "" {
+			continue
+		}
+		for _, res := range ownMediaResources(InboundMessage{MessageID: it.MessageID, MessageType: it.MessageType, Content: it.Content}) {
+			out = append(out, QuotedMediaResource{
+				MessageID: res.messageID, Key: res.key, Kind: string(res.kind), FetchType: res.fetchType,
+				Filename: res.filename, MimeType: res.mimeType, SizeBytes: res.sizeBytes,
+			})
+			if len(out) >= maxQuotedMediaResources {
+				return out
+			}
+		}
+	}
+	return out
+}
+
+func ownMediaResources(lm InboundMessage) []larkMediaResource {
 	var payload struct {
 		ImageKey    string `json:"image_key"`
 		FileKey     string `json:"file_key"`

@@ -594,3 +594,43 @@ func TestEnrichLabelsSlashCommandOnItsOwnLine(t *testing.T) {
 		t.Fatalf("body = %q", out.Body)
 	}
 }
+
+// TestEnrichQuotedFileCollectsMedia: quoting a file hands the media resolver
+// the quoted file (downloaded from the parent message), not just "[File]".
+// Children of a quoted merge_forward are skipped — Feishu cannot download
+// their resources.
+func TestEnrichQuotedFileCollectsMedia(t *testing.T) {
+	t.Parallel()
+	fake := newEnricherFake()
+	fake.byID["om_parent"] = []LarkMessage{{
+		MessageID:   "om_parent",
+		MessageType: "file",
+		Content:     `{"file_key":"file_spec","file_name":"spec.md"}`,
+		SenderID:    "ou_a",
+		SenderType:  "user",
+	}, {
+		MessageID:      "om_child",
+		MessageType:    "file",
+		Content:        `{"file_key":"file_child","file_name":"child.md"}`,
+		UpperMessageID: "om_parent",
+	}}
+	in := InboundMessage{MessageType: "text", MessageID: "om_reply", Body: "看下这个文档", ParentID: "om_parent"}
+
+	out := enrich(t, fake, in, InboundEnricherConfig{})
+
+	want := []QuotedMediaResource{{MessageID: "om_parent", Key: "file_spec", Kind: "file", FetchType: "file", Filename: "spec.md"}}
+	if len(out.QuotedMedia) != 1 || out.QuotedMedia[0] != want[0] {
+		t.Fatalf("QuotedMedia = %+v, want %+v", out.QuotedMedia, want)
+	}
+}
+
+func TestEnrichQuotedTextHasNoMedia(t *testing.T) {
+	t.Parallel()
+	fake := newEnricherFake()
+	fake.byID["om_parent"] = []LarkMessage{textMsg("om_parent", "ou_a", "hello", "1000")}
+	in := InboundMessage{MessageType: "text", MessageID: "om_reply", Body: "?", ParentID: "om_parent"}
+
+	if out := enrich(t, fake, in, InboundEnricherConfig{}); len(out.QuotedMedia) != 0 {
+		t.Fatalf("QuotedMedia = %+v, want none", out.QuotedMedia)
+	}
+}

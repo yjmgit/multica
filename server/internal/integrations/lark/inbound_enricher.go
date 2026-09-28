@@ -204,6 +204,11 @@ func (e *inboundEnricher) Enrich(ctx context.Context, msg InboundMessage, creds 
 	var quotedErr error
 	if msg.ParentID != "" {
 		quotedItems, quotedErr = e.client.GetMessage(ctx, creds, msg.ParentID)
+		if quotedErr == nil {
+			// Files in the quoted message are downloaded like the reply's
+			// own, so quoting a file hands the agent the file, not "[File]".
+			msg.QuotedMedia = quotedMediaFromItems(quotedItems)
+		}
 	}
 	var forwardItems []LarkMessage
 	var forwardErr error

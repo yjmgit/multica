@@ -64,6 +64,25 @@ type InboundMessage struct {
 	// HasSelectedContext is set when enrichment renders an explicitly selected
 	// quote or forward; automatic recent context does not set it.
 	HasSelectedContext bool
+
+	// QuotedMedia are the files, images, audio and videos inside the message
+	// this one quotes. The enricher collects them when it fetches
+	// that message; the media resolver downloads them alongside the message's
+	// own resources, so "review this file" as a quote-reply reaches the agent
+	// with the file attached rather than a "[File]" placeholder.
+	QuotedMedia []QuotedMediaResource
+}
+
+// QuotedMediaResource is a downloadable resource of a quoted or forwarded
+// message, addressed by that message's id.
+type QuotedMediaResource struct {
+	MessageID string
+	Key       string
+	Kind      string
+	FetchType string
+	Filename  string
+	MimeType  string
+	SizeBytes int64
 }
 
 // Outcome categorizes what the inbound pipeline decided. The OutcomeReplier

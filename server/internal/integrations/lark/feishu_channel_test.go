@@ -854,3 +854,43 @@ func TestChannelMsgType(t *testing.T) {
 		}
 	}
 }
+
+// TestFeishuMediaResolver_DownloadsQuotedFile: a text reply quoting a file
+// carries that file, downloaded with the QUOTED message's id.
+func TestFeishuMediaResolver_DownloadsQuotedFile(t *testing.T) {
+	sender := &fakeSender{downloaded: DownloadedResource{
+		Data:        []byte("# spec"),
+		ContentType: "text/markdown",
+		SizeBytes:   6,
+	}}
+	storage := &fakeMediaStorage{}
+	resolver := NewFeishuMediaResolver(sender, fakeCreds{secret: "plain"}, storage, &fakeMediaLedger{}, newDiscardLogger())
+	lm := InboundMessage{
+		MessageID:   "om_reply",
+		MessageType: "text",
+		Body:        "看下这个文档",
+		Content:     `{"text":"看下这个文档"}`,
+		ParentID:    "om_parent",
+		QuotedMedia: []QuotedMediaResource{{MessageID: "om_parent", Key: "file_spec", Kind: "file", FetchType: "file", Filename: "spec.md"}},
+	}
+	msg := channelMessageFromLark(lm)
+	if !resolver.HasMedia(msg) {
+		t.Fatal("HasMedia = false for a reply quoting a file")
+	}
+
+	got := resolver.ResolveMedia(context.Background(), testMediaInstallation(t), engine.ResolvedIdentity{},
+		uuidFromString(t, "22222222-2222-2222-2222-222222222222"), uuidFromString(t, "33333333-3333-4333-8333-333333333333"), msg)
+
+	if len(sender.downloadCalls) != 1 {
+		t.Fatalf("download calls = %d, want 1", len(sender.downloadCalls))
+	}
+	if call := sender.downloadCalls[0]; call.MessageID != "om_parent" || call.FileKey != "file_spec" || call.Type != "file" {
+		t.Fatalf("download params wrong: %+v", call)
+	}
+	if len(got.MediaRefs) != 1 || got.MediaRefs[0].Filename != "spec.md" || got.MediaRefs[0].Type != channel.MsgTypeFile {
+		t.Fatalf("media refs = %+v", got.MediaRefs)
+	}
+	if got.Text != "看下这个文档" {
+		t.Fatalf("text changed: %q", got.Text)
+	}
+}
