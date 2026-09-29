@@ -253,6 +253,7 @@
   "tabs": {
     "overview": "개요",
     "work": "작업",
+    "conversations": "대화 기록",
     "capabilities": "기능",
     "settings": "설정",
     "general": "일반",
@@ -959,5 +960,14 @@
   "actions": {
     "selected_other": "{{count}}개 선택됨",
     "clear_selection": "선택 해제"
+  },
+  "conversations": {
+    "loading": "대화를 불러오는 중…",
+    "empty": "아직 이 에이전트와 나눈 대화가 없습니다.",
+    "no_messages": "이 대화에는 메시지가 없습니다.",
+    "list_aria": "대화 목록",
+    "untitled": "제목 없음",
+    "unknown_member": "나간 멤버",
+    "channel_lark": "Feishu"
   }
 }

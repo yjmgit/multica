@@ -37,6 +37,7 @@ import { McpConfigTab } from "./tabs/mcp-config-tab";
 import { AgentMcpTab } from "./tabs/agent-mcp-tab";
 import { IntegrationsTab } from "./tabs/integrations-tab";
 import { RuntimeConfigTab } from "./tabs/runtime-config-tab";
+import { ConversationsTab } from "./tabs/conversations-tab";
 import { AgentDetailInspector } from "./agent-detail-inspector";
 import { AgentAccessSettings } from "./agent-access-settings";
 import { AgentOverviewSummary } from "./agent-overview-summary";
@@ -44,11 +45,12 @@ import { ActorIssuesPanel } from "../../common/actor-issues-panel";
 import { useT } from "../../i18n";
 import { useNavigation } from "../../navigation";
 
-type DetailSection = "overview" | "work" | "capabilities" | "settings";
+type DetailSection = "overview" | "work" | "conversations" | "capabilities" | "settings";
 
 export type DetailTab =
   | "overview"
   | "work"
+  | "conversations"
   | "instructions"
   | "skills"
   | "mcp_config"
@@ -94,6 +96,7 @@ const SETTINGS_TABS: SecondaryTab[] = [
 const TOP_TABS: { id: DetailSection; labelKey: DetailSection }[] = [
   { id: "overview", labelKey: "overview" },
   { id: "work", labelKey: "work" },
+  { id: "conversations", labelKey: "conversations" },
   { id: "capabilities", labelKey: "capabilities" },
   { id: "settings", labelKey: "settings" },
 ];
@@ -105,6 +108,7 @@ const SETTINGS_IDS = new Set<DetailTab>(SETTINGS_TABS.map((tab) => tab.id));
 const DETAIL_VIEWS = new Set<DetailTab>([
   "overview",
   "work",
+  "conversations",
   ...CAPABILITY_TABS.map((tab) => tab.id),
   ...SETTINGS_TABS.map((tab) => tab.id),
 ]);
@@ -116,6 +120,7 @@ function isDetailTab(value: string | null): value is DetailTab {
 function sectionForView(view: DetailTab): DetailSection {
   if (view === "overview") return "overview";
   if (view === "work") return "work";
+  if (view === "conversations") return "conversations";
   if (CAPABILITY_IDS.has(view)) return "capabilities";
   return "settings";
 }
@@ -238,6 +243,7 @@ export function AgentOverviewPane({
       new Set<DetailTab>([
         "overview",
         "work",
+        "conversations",
         ...visibleCapabilityTabs.map((tab) => tab.id),
         ...visibleSettingsTabs.map((tab) => tab.id),
       ]),
@@ -272,7 +278,7 @@ export function AgentOverviewPane({
   );
 
   const requestSection = (section: DetailSection) => {
-    if (section === "overview" || section === "work") {
+    if (section === "overview" || section === "work" || section === "conversations") {
       requestView(section);
       return;
     }
@@ -376,7 +382,7 @@ export function AgentOverviewPane({
       <div
         className={cn(
           "min-h-0 flex-1 overflow-y-auto",
-          isSecondaryLayout && "md:overflow-hidden",
+          (isSecondaryLayout || effectiveView === "conversations") && "md:overflow-hidden",
         )}
       >
         {effectiveView === "overview" && (
@@ -397,6 +403,12 @@ export function AgentOverviewPane({
         {effectiveView === "work" && (
           <div className={cn(PAGE_RAIL, "flex min-h-[620px] flex-col")}>
             <ActorIssuesPanel actorType="agent" actorId={agent.id} />
+          </div>
+        )}
+
+        {effectiveView === "conversations" && (
+          <div className={cn(PAGE_RAIL, "flex min-h-[620px] flex-col md:h-full md:min-h-0")}>
+            <ConversationsTab agent={agent} members={members} />
           </div>
         )}
 

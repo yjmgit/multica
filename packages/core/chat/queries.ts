@@ -34,6 +34,11 @@ export const chatKeys = {
   all: (wsId: string) => ["chat", wsId] as const,
   /** Full sessions list (active + archived); the dropdown splits locally. */
   sessions: (wsId: string) => [...chatKeys.all(wsId), "sessions"] as const,
+  /** Read-only history of every member's Chats with one agent. */
+  agentConversations: (wsId: string, agentId: string) =>
+    [...chatKeys.all(wsId), "agent-conversations", agentId] as const,
+  agentConversationMessages: (wsId: string, agentId: string, sessionId: string) =>
+    [...chatKeys.all(wsId), "agent-conversation-messages", agentId, sessionId] as const,
   session: (wsId: string, id: string) => [...chatKeys.all(wsId), "session", id] as const,
   messagesAll: () => ["chat", "messages"] as const,
   messages: (sessionId: string) => [...chatKeys.messagesAll(), sessionId] as const,
@@ -132,6 +137,24 @@ export function chatSessionOptions(wsId: string, id: string) {
     queryFn: () => api.getChatSession(id),
     enabled: !!id,
     staleTime: Infinity,
+  });
+}
+
+export function agentConversationsOptions(wsId: string, agentId: string) {
+  return queryOptions({
+    queryKey: chatKeys.agentConversations(wsId, agentId),
+    queryFn: () => api.listAgentConversations(agentId),
+    enabled: !!agentId,
+    staleTime: 30_000,
+  });
+}
+
+export function agentConversationMessagesOptions(wsId: string, agentId: string, sessionId: string) {
+  return queryOptions({
+    queryKey: chatKeys.agentConversationMessages(wsId, agentId, sessionId),
+    queryFn: () => api.listAgentConversationMessages(agentId, sessionId),
+    enabled: !!agentId && !!sessionId,
+    staleTime: 30_000,
   });
 }
 

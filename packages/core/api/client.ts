@@ -3643,6 +3643,23 @@ export class ApiClient {
     });
   }
 
+  // Read-only history of every Chat with an agent, whoever started it.
+  async listAgentConversations(agentId: string): Promise<ChatSession[]> {
+    const raw: unknown = await this.fetch(`/api/agents/${agentId}/conversations`);
+    return parseWithFallback(raw, ChatSessionListSchema, EMPTY_CHAT_SESSION_LIST, {
+      endpoint: "GET /api/agents/:id/conversations",
+    });
+  }
+
+  async listAgentConversationMessages(agentId: string, sessionId: string): Promise<ChatMessage[]> {
+    const raw: unknown = await this.fetch(
+      `/api/agents/${agentId}/conversations/${sessionId}/messages`,
+    );
+    return parseWithFallback(raw, ChatMessageListSchema, EMPTY_CHAT_MESSAGE_LIST, {
+      endpoint: "GET /api/agents/:id/conversations/:sessionId/messages",
+    });
+  }
+
   async listChatMessagesPage(
     sessionId: string,
     params: { before?: { created_at: string; id: string } | null; limit?: number } = {},

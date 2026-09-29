@@ -245,6 +245,7 @@
   "tabs": {
     "overview": "概要",
     "work": "作業",
+    "conversations": "会話履歴",
     "capabilities": "機能",
     "settings": "設定",
     "general": "一般",
@@ -959,5 +960,14 @@
   "actions": {
     "selected_other": "{{count}} 件選択中",
     "clear_selection": "選択を解除"
+  },
+  "conversations": {
+    "loading": "会話を読み込み中…",
+    "empty": "このエージェントとの会話はまだありません。",
+    "no_messages": "この会話にはメッセージがありません。",
+    "list_aria": "会話一覧",
+    "untitled": "無題",
+    "unknown_member": "退出したメンバー",
+    "channel_lark": "Feishu"
   }
 }

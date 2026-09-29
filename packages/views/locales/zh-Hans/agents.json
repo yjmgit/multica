@@ -253,6 +253,7 @@
   "tabs": {
     "overview": "概览",
     "work": "工作",
+    "conversations": "对话记录",
     "capabilities": "能力",
     "settings": "设置",
     "general": "通用",
@@ -959,5 +960,14 @@
   "actions": {
     "selected_other": "已选 {{count}} 项",
     "clear_selection": "清除选择"
+  },
+  "conversations": {
+    "loading": "正在加载对话…",
+    "empty": "还没有人和这个智能体聊过。",
+    "no_messages": "这个对话还没有消息。",
+    "list_aria": "对话列表",
+    "untitled": "未命名",
+    "unknown_member": "已离开的成员",
+    "channel_lark": "飞书"
   }
 }

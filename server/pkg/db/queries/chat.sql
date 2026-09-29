@@ -1725,3 +1725,32 @@ WHERE workspace_id = $1
   AND status = 'active'
 ORDER BY created_at ASC
 LIMIT 1;
+
+-- name: ListChatSessionsByAgent :many
+-- Every member-visible Chat with one agent, whoever started it (the agent
+-- page's read-only conversation history). Same public-session rule and
+-- latest-message preview as ListChatSessionsByCreator; unread is per-creator
+-- state and is not reported here.
+SELECT cs.*,
+       COALESCE(lm.content, '') AS last_message_content,
+       COALESCE(lm.role, '') AS last_message_role,
+       lm.created_at AS last_message_at,
+       lm.failure_reason AS last_message_failure_reason,
+       COALESCE(lm.message_kind, '') AS last_message_kind
+FROM chat_session cs
+LEFT JOIN LATERAL (
+  SELECT content, role, created_at, failure_reason, message_kind
+    FROM chat_message m
+   WHERE m.chat_session_id = cs.id
+     AND m.message_kind != 'channel_command'
+   ORDER BY m.created_at DESC
+   LIMIT 1
+) lm ON true
+WHERE cs.workspace_id = $1 AND cs.agent_id = $2
+  AND (
+    cs.explicitly_created_at IS NOT NULL
+    OR
+    lm.created_at IS NOT NULL
+  )
+ORDER BY COALESCE(lm.created_at, cs.updated_at) DESC
+LIMIT $3;

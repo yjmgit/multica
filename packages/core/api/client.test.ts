@@ -1668,6 +1668,55 @@ describe("ApiClient", () => {
     });
   });
 
+  describe("agent conversations", () => {
+    const jsonResponse = (body: unknown, status: number) =>
+      new Response(JSON.stringify(body), {
+        status,
+        headers: { "Content-Type": "application/json" },
+      });
+
+    it("reads every member's Chats with an agent", async () => {
+      const fetchMock = vi.fn().mockResolvedValue(
+        jsonResponse(
+          [
+            {
+              id: "s1",
+              workspace_id: "ws-1",
+              agent_id: "agent-1",
+              creator_id: "user-2",
+              title: "Tenants",
+              status: "active",
+              has_unread: false,
+              channel_source: { channel_type: "lark", installation_id: "i1", route_revision: 1 },
+              created_at: "2026-06-01T00:00:00Z",
+              updated_at: "2026-06-01T00:00:00Z",
+            },
+          ],
+          200,
+        ),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const client = new ApiClient("https://api.example.test");
+      const sessions = await client.listAgentConversations("agent-1");
+
+      expect(fetchMock.mock.calls[0]![0]).toBe(
+        "https://api.example.test/api/agents/agent-1/conversations",
+      );
+      expect(sessions).toEqual([
+        expect.objectContaining({ id: "s1", creator_id: "user-2", title: "Tenants" }),
+      ]);
+    });
+
+    it("falls back to empty lists for malformed responses", async () => {
+      vi.stubGlobal("fetch", vi.fn().mockImplementation(async () => jsonResponse({ broken: true }, 200)));
+
+      const client = new ApiClient("https://api.example.test");
+      await expect(client.listAgentConversations("agent-1")).resolves.toEqual([]);
+      await expect(client.listAgentConversationMessages("agent-1", "s1")).resolves.toEqual([]);
+    });
+  });
+
   describe("listChatMessagesPage deployment-order fallback", () => {
     const jsonResponse = (body: unknown, status: number, statusText = "") =>
       new Response(JSON.stringify(body), {

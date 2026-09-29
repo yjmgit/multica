@@ -263,6 +263,7 @@
   "tabs": {
     "overview": "Vue d'ensemble",
     "work": "Travail",
+    "conversations": "Conversations",
     "capabilities": "Capacités",
     "settings": "Paramètres",
     "general": "Général",
@@ -981,5 +982,14 @@
     "selected_one": "{{count}} sélectionné",
     "selected_other": "{{count}} sélectionnés",
     "clear_selection": "Effacer la sélection"
+  },
+  "conversations": {
+    "loading": "Chargement des conversations…",
+    "empty": "Personne n’a encore discuté avec cet agent.",
+    "no_messages": "Cette conversation ne contient aucun message.",
+    "list_aria": "Conversations",
+    "untitled": "Sans titre",
+    "unknown_member": "Ancien membre",
+    "channel_lark": "Feishu"
   }
 }
