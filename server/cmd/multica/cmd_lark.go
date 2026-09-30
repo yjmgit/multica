@@ -137,6 +137,20 @@ include the goal, inputs and what to deliver.`,
 	RunE:    runLarkDelegate,
 }
 
+var larkFollowAutopilotCmd = &cobra.Command{
+	Use:   "follow-autopilot <autopilot-id>",
+	Short: "Post each run result of an existing Autopilot to this Feishu chat",
+	Long: `Send the result of every future run of an Autopilot to this Feishu chat
+(@-mentioning the person who asked): the comment the run posts on its issue, or
+the run's output when it creates no issue. A failed run is reported too.
+
+An Autopilot you create with "multica autopilot create" from a Feishu
+conversation already reports here; use this for one that exists already.`,
+	Example: `  $ multica lark follow-autopilot 0b6f3c7e-1a2b-4c5d-8e9f-0123456789ab`,
+	Args:    exactArgs(1),
+	RunE:    runLarkFollowAutopilot,
+}
+
 var larkChatsCmd = &cobra.Command{
 	Use:   "chats",
 	Short: "List the group chats the bot is in",
@@ -201,7 +215,7 @@ func init() {
 
 	larkScheduledCmd.AddCommand(larkScheduledListCmd, larkScheduledCancelCmd)
 	larkGroupCmd.AddCommand(larkGroupCreateCmd, larkGroupAddCmd)
-	larkCmd.AddCommand(larkContextCmd, larkSendCmd, larkScheduledCmd, larkDocCmd, larkChatsCmd, larkMembersCmd, larkGroupCmd, larkWakeupCmd, larkDelegateCmd)
+	larkCmd.AddCommand(larkContextCmd, larkSendCmd, larkScheduledCmd, larkDocCmd, larkChatsCmd, larkMembersCmd, larkGroupCmd, larkWakeupCmd, larkDelegateCmd, larkFollowAutopilotCmd)
 }
 
 // addLarkSendFlags registers the send flags; tests build a fresh command with it.
@@ -517,6 +531,27 @@ func runLarkWakeup(cmd *cobra.Command, args []string) error {
 func delegateDescription(instructions string) string {
 	return strings.TrimSpace(instructions) + "\n\n---\n" +
 		"Delegated from a Feishu conversation. Post your result as a comment on this issue — the comment each run posts is relayed to that conversation automatically, so write it for the person who asked.\n"
+}
+
+func runLarkFollowAutopilot(cmd *cobra.Command, args []string) error {
+	autopilotID := strings.TrimSpace(args[0])
+	if autopilotID == "" {
+		return fmt.Errorf("the autopilot ID is empty")
+	}
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
+	}
+	if _, err := requireWorkspaceID(cmd); err != nil {
+		return err
+	}
+	ctx, cancel := cli.APIContext(context.Background())
+	defer cancel()
+	var out map[string]any
+	if err := client.PostJSON(ctx, "/api/lark/autopilot-relays", map[string]any{"autopilot_id": autopilotID}, &out); err != nil {
+		return err
+	}
+	return cli.PrintJSON(os.Stdout, out)
 }
 
 func runLarkDelegate(cmd *cobra.Command, args []string) error {

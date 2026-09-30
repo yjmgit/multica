@@ -514,3 +514,54 @@ func (h *Handler) RegisterLarkRelay(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusCreated, relay)
 }
+
+// FollowLarkAutopilotRequest is the body of `multica lark follow-autopilot`.
+type FollowLarkAutopilotRequest struct {
+	AutopilotID string `json:"autopilot_id"`
+}
+
+// FollowLarkAutopilot serves `multica lark follow-autopilot`: each run of the
+// autopilot reports its result to the calling task's Feishu chat.
+func (h *Handler) FollowLarkAutopilot(w http.ResponseWriter, r *http.Request) {
+	scope, ok := h.larkToolScope(w, r)
+	if !ok {
+		return
+	}
+	var req FollowLarkAutopilotRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	autopilotID, ok := parseUUIDOrBadRequest(w, req.AutopilotID, "autopilot_id")
+	if !ok {
+		return
+	}
+	relay, err := h.LarkTools.RegisterAutopilotRelay(r.Context(), scope, autopilotID)
+	if err != nil {
+		writeLarkToolError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, relay)
+}
+
+// relayNewAutopilotToFeishu makes a create_issue autopilot that an agent
+// creates while answering a Feishu message report each run back to that
+// chat. Otherwise its results would only reach the issue it creates.
+// run_only autopilots are left alone: `multica lark wakeup` creates those and
+// its runs send their own result. Best-effort — the autopilot already exists.
+func (h *Handler) relayNewAutopilotToFeishu(r *http.Request, ap db.Autopilot) {
+	if h.LarkTools == nil || ap.ExecutionMode != "create_issue" || r.Header.Get("X-Actor-Source") != "task_token" {
+		return
+	}
+	agent, errAgent := util.ParseUUID(r.Header.Get("X-Agent-ID"))
+	task, errTask := util.ParseUUID(r.Header.Get("X-Task-ID"))
+	if errAgent != nil || errTask != nil {
+		return
+	}
+	scope := lark.ToolScope{WorkspaceID: ap.WorkspaceID, AgentID: agent, TaskID: task}
+	_, err := h.LarkTools.RegisterAutopilotRelay(r.Context(), scope, ap.ID)
+	if err != nil && !errors.Is(err, lark.ErrToolInvalidInput) && !errors.Is(err, lark.ErrToolNoInstallation) {
+		slog.Warn("lark: relaying new autopilot to Feishu failed",
+			append(logger.RequestAttrs(r), "autopilot_id", uuidToString(ap.ID), "error", err)...)
+	}
+}

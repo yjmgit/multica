@@ -2,6 +2,7 @@ package lark
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -72,6 +73,46 @@ func (t *Tools) RegisterRelay(ctx context.Context, scope ToolScope, issueID pgty
 	return RelayedIssue{IssueID: uuidString(row.IssueID), ChatID: row.ChatID}, nil
 }
 
+// RelayedAutopilot is the result of registering an autopilot relay.
+type RelayedAutopilot struct {
+	AutopilotID string `json:"autopilot_id"`
+	Title       string `json:"title"`
+	ChatID      string `json:"chat_id"`
+}
+
+// RegisterAutopilotRelay records that each run of autopilotID reports back to
+// the current Feishu conversation. The calling task must be running in one.
+func (t *Tools) RegisterAutopilotRelay(ctx context.Context, scope ToolScope, autopilotID pgtype.UUID) (RelayedAutopilot, error) {
+	tc, err := t.resolve(ctx, scope)
+	if err != nil {
+		return RelayedAutopilot{}, err
+	}
+	if tc.current == nil {
+		return RelayedAutopilot{}, invalidInput("autopilot results can only be relayed from a task running in a Feishu conversation")
+	}
+	ap, err := t.queries.GetAutopilot(ctx, autopilotID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return RelayedAutopilot{}, invalidInput("autopilot not found")
+		}
+		return RelayedAutopilot{}, err
+	}
+	if ap.WorkspaceID != scope.WorkspaceID {
+		return RelayedAutopilot{}, invalidInput("autopilot not found")
+	}
+	row, err := t.queries.UpsertChannelAutopilotRelay(ctx, db.UpsertChannelAutopilotRelayParams{
+		WorkspaceID:     scope.WorkspaceID,
+		InstallationID:  tc.inst.ID,
+		AutopilotID:     ap.ID,
+		ChatID:          tc.current.ChatID,
+		RequesterOpenID: tc.current.RequesterOpenID,
+	})
+	if err != nil {
+		return RelayedAutopilot{}, fmt.Errorf("store autopilot relay: %w", err)
+	}
+	return RelayedAutopilot{AutopilotID: uuidString(row.AutopilotID), Title: ap.Title, ChatID: row.ChatID}, nil
+}
+
 // SetAppURL sets the Multica web URL used to link relayed issues.
 func (t *Tools) SetAppURL(appURL string) { t.appURL = appURL }
 
@@ -104,7 +145,15 @@ func (t *Tools) relayRun(ctx context.Context, e events.Event) error {
 		}
 	}
 	task, err := t.queries.GetAgentTask(ctx, taskID)
-	if err != nil || !task.IssueID.Valid {
+	if err != nil {
+		return nil
+	}
+	if task.AutopilotRunID.Valid {
+		if err := t.relayAutopilotRun(ctx, task, failed); err != nil {
+			return err
+		}
+	}
+	if !task.IssueID.Valid {
 		return nil
 	}
 	relays, err := t.queries.ListActiveChannelIssueRelaysByIssue(ctx, task.IssueID)
@@ -213,4 +262,95 @@ func (t *Tools) postRelay(ctx context.Context, relay db.ChannelIssueRelay, text 
 	}
 	_, err = t.client.SendMessage(ctx, creds, target, msgType, content)
 	return err
+}
+
+// relayAutopilotRun posts one autopilot run's result to every chat following
+// the autopilot: the comment the run left on its issue, or the run's output
+// when it has no issue (run_only).
+func (t *Tools) relayAutopilotRun(ctx context.Context, task db.AgentTaskQueue, failed bool) error {
+	run, err := t.queries.GetAutopilotRun(ctx, task.AutopilotRunID)
+	if err != nil {
+		return nil
+	}
+	relays, err := t.queries.ListChannelAutopilotRelaysByAutopilot(ctx, run.AutopilotID)
+	if err != nil || len(relays) == 0 {
+		return err
+	}
+	ap, err := t.queries.GetAutopilot(ctx, run.AutopilotID)
+	if err != nil {
+		return fmt.Errorf("load autopilot: %w", err)
+	}
+
+	body := ""
+	if !failed {
+		if task.IssueID.Valid {
+			comment, err := t.queries.GetLatestIssueCommentByTask(ctx, db.GetLatestIssueCommentByTaskParams{
+				IssueID: task.IssueID, SourceTaskID: task.ID,
+			})
+			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+				return fmt.Errorf("load run comment: %w", err)
+			}
+			body = strings.TrimSpace(comment.Content)
+		}
+		if body == "" {
+			var result struct {
+				Output string `json:"output"`
+			}
+			_ = json.Unmarshal(task.Result, &result)
+			body = strings.TrimSpace(result.Output)
+		}
+		if body == "" {
+			return nil
+		}
+	}
+	text := t.autopilotRelayText(ctx, task, ap, failed, body)
+
+	var firstErr error
+	for _, relay := range relays {
+		claimed, err := t.queries.ClaimChannelAutopilotRelayTask(ctx, db.ClaimChannelAutopilotRelayTaskParams{ID: relay.ID, TaskID: task.ID})
+		if err != nil || claimed == 0 {
+			if err != nil && firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		target := db.ChannelIssueRelay{
+			WorkspaceID: relay.WorkspaceID, InstallationID: relay.InstallationID,
+			ChatID: relay.ChatID, RequesterOpenID: relay.RequesterOpenID,
+		}
+		if err := t.postRelay(ctx, target, text); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+func (t *Tools) autopilotRelayText(ctx context.Context, task db.AgentTaskQueue, ap db.Autopilot, failed bool, body string) string {
+	agentName := "智能体"
+	if agent, err := t.queries.GetAgent(ctx, task.AgentID); err == nil && agent.Name != "" {
+		agentName = agent.Name
+	}
+	link := ""
+	if task.IssueID.Valid {
+		if issue, err := t.queries.GetIssue(ctx, task.IssueID); err == nil {
+			if ws, err := t.queries.GetWorkspace(ctx, issue.WorkspaceID); err == nil {
+				link = channel.IssueWebLink(t.appURL, ws.Slug, service.IssueIdentifier(ws.IssuePrefix, issue.Number))
+			}
+		}
+	}
+	var b strings.Builder
+	if failed {
+		fmt.Fprintf(&b, "**%s** 的自动化「%s」这次运行失败了。", agentName, ap.Title)
+	} else {
+		fmt.Fprintf(&b, "**%s** 的自动化「%s」运行完成：\n\n", agentName, ap.Title)
+		if trimmed, cut := truncateRunes(body, maxRelayChars); cut {
+			b.WriteString(trimmed + "…\n\n（内容较长，完整内容见任务）")
+		} else {
+			b.WriteString(body)
+		}
+	}
+	if link != "" {
+		fmt.Fprintf(&b, "\n\n[在 Multica 查看](%s)", link)
+	}
+	return b.String()
 }

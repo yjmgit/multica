@@ -321,6 +321,18 @@ type AutopilotTrigger struct {
 	CreatedByID pgtype.UUID `json:"created_by_id"`
 }
 
+type ChannelAutopilotRelay struct {
+	ID              pgtype.UUID        `json:"id"`
+	WorkspaceID     pgtype.UUID        `json:"workspace_id"`
+	InstallationID  pgtype.UUID        `json:"installation_id"`
+	AutopilotID     pgtype.UUID        `json:"autopilot_id"`
+	ChatID          string             `json:"chat_id"`
+	RequesterOpenID string             `json:"requester_open_id"`
+	LastTaskID      pgtype.UUID        `json:"last_task_id"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+}
+
 type ChannelBindingToken struct {
 	TokenHash      string             `json:"token_hash"`
 	WorkspaceID    pgtype.UUID        `json:"workspace_id"`

@@ -1,0 +1,1 @@
+DROP INDEX CONCURRENTLY IF EXISTS channel_autopilot_relay_autopilot_installation_uidx;

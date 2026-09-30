@@ -29,3 +29,23 @@ SELECT * FROM comment
 WHERE issue_id = $1 AND source_task_id = $2 AND deleted_at IS NULL
 ORDER BY created_at DESC
 LIMIT 1;
+
+-- name: UpsertChannelAutopilotRelay :one
+INSERT INTO channel_autopilot_relay (
+    workspace_id, installation_id, autopilot_id, chat_id, requester_open_id
+) VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (autopilot_id, installation_id) DO UPDATE SET
+    chat_id = EXCLUDED.chat_id,
+    requester_open_id = EXCLUDED.requester_open_id,
+    updated_at = now()
+RETURNING *;
+
+-- name: ListChannelAutopilotRelaysByAutopilot :many
+SELECT * FROM channel_autopilot_relay
+WHERE autopilot_id = $1;
+
+-- name: ClaimChannelAutopilotRelayTask :execrows
+-- Records that task_id is being relayed; zero rows means it already was.
+UPDATE channel_autopilot_relay
+SET last_task_id = sqlc.arg(task_id), updated_at = now()
+WHERE id = sqlc.arg(id) AND last_task_id IS DISTINCT FROM sqlc.arg(task_id);

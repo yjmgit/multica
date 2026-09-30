@@ -11,6 +11,26 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const claimChannelAutopilotRelayTask = `-- name: ClaimChannelAutopilotRelayTask :execrows
+UPDATE channel_autopilot_relay
+SET last_task_id = $1, updated_at = now()
+WHERE id = $2 AND last_task_id IS DISTINCT FROM $1
+`
+
+type ClaimChannelAutopilotRelayTaskParams struct {
+	TaskID pgtype.UUID `json:"task_id"`
+	ID     pgtype.UUID `json:"id"`
+}
+
+// Records that task_id is being relayed; zero rows means it already was.
+func (q *Queries) ClaimChannelAutopilotRelayTask(ctx context.Context, arg ClaimChannelAutopilotRelayTaskParams) (int64, error) {
+	result, err := q.db.Exec(ctx, claimChannelAutopilotRelayTask, arg.TaskID, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const claimChannelIssueRelayTask = `-- name: ClaimChannelIssueRelayTask :execrows
 UPDATE channel_issue_relay
 SET last_task_id = $1, updated_at = now()
@@ -108,6 +128,83 @@ func (q *Queries) ListActiveChannelIssueRelaysByIssue(ctx context.Context, issue
 		return nil, err
 	}
 	return items, nil
+}
+
+const listChannelAutopilotRelaysByAutopilot = `-- name: ListChannelAutopilotRelaysByAutopilot :many
+SELECT id, workspace_id, installation_id, autopilot_id, chat_id, requester_open_id, last_task_id, created_at, updated_at FROM channel_autopilot_relay
+WHERE autopilot_id = $1
+`
+
+func (q *Queries) ListChannelAutopilotRelaysByAutopilot(ctx context.Context, autopilotID pgtype.UUID) ([]ChannelAutopilotRelay, error) {
+	rows, err := q.db.Query(ctx, listChannelAutopilotRelaysByAutopilot, autopilotID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ChannelAutopilotRelay{}
+	for rows.Next() {
+		var i ChannelAutopilotRelay
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.InstallationID,
+			&i.AutopilotID,
+			&i.ChatID,
+			&i.RequesterOpenID,
+			&i.LastTaskID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const upsertChannelAutopilotRelay = `-- name: UpsertChannelAutopilotRelay :one
+INSERT INTO channel_autopilot_relay (
+    workspace_id, installation_id, autopilot_id, chat_id, requester_open_id
+) VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (autopilot_id, installation_id) DO UPDATE SET
+    chat_id = EXCLUDED.chat_id,
+    requester_open_id = EXCLUDED.requester_open_id,
+    updated_at = now()
+RETURNING id, workspace_id, installation_id, autopilot_id, chat_id, requester_open_id, last_task_id, created_at, updated_at
+`
+
+type UpsertChannelAutopilotRelayParams struct {
+	WorkspaceID     pgtype.UUID `json:"workspace_id"`
+	InstallationID  pgtype.UUID `json:"installation_id"`
+	AutopilotID     pgtype.UUID `json:"autopilot_id"`
+	ChatID          string      `json:"chat_id"`
+	RequesterOpenID string      `json:"requester_open_id"`
+}
+
+func (q *Queries) UpsertChannelAutopilotRelay(ctx context.Context, arg UpsertChannelAutopilotRelayParams) (ChannelAutopilotRelay, error) {
+	row := q.db.QueryRow(ctx, upsertChannelAutopilotRelay,
+		arg.WorkspaceID,
+		arg.InstallationID,
+		arg.AutopilotID,
+		arg.ChatID,
+		arg.RequesterOpenID,
+	)
+	var i ChannelAutopilotRelay
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.InstallationID,
+		&i.AutopilotID,
+		&i.ChatID,
+		&i.RequesterOpenID,
+		&i.LastTaskID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const upsertChannelIssueRelay = `-- name: UpsertChannelIssueRelay :one

@@ -42,6 +42,7 @@ var workspaceDeletionManifest = map[string]workspaceDeleteAction{
 	"channel_inbound_audit":              workspaceDelete,
 	"channel_inbound_message_dedup":      workspaceDelete,
 	"channel_issue_relay":                workspaceDelete,
+	"channel_autopilot_relay":            workspaceDelete,
 	"channel_installation":               workspaceDelete,
 	"channel_media_pending_object":       workspaceDeleteSettle,
 	"channel_outbound_card_message":      workspaceDelete,

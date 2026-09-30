@@ -531,6 +531,55 @@ func TestFeishuToolsDB(t *testing.T) {
 		}
 	})
 
+	t.Run("autopilot runs report to the chat that follows them", func(t *testing.T) {
+		apID := f.fx.Insert(t, "autopilot", dbfx.Cols{
+			"workspace_id": f.fx.WorkspaceID, "title": "生产新增审查", "assignee_id": f.agentID,
+			"execution_mode": "create_issue", "created_by_type": "member", "created_by_id": f.fx.UserID,
+		})
+		f.fx.Cleanup(t, `DELETE FROM channel_autopilot_relay WHERE autopilot_id = $1`, apID)
+		var apUUID pgtype.UUID
+		_ = apUUID.Scan(apID)
+		if _, err := f.tools.RegisterAutopilotRelay(ctx, f.bareScope, apUUID); !errors.Is(err, ErrToolInvalidInput) {
+			t.Fatalf("follow without a Feishu chat: err = %v", err)
+		}
+		relay, err := f.tools.RegisterAutopilotRelay(ctx, f.chatScope, apUUID)
+		if err != nil || relay.ChatID != "oc_group" || relay.Title != "生产新增审查" {
+			t.Fatalf("RegisterAutopilotRelay = %+v, %v", relay, err)
+		}
+
+		// create_issue: the run's comment on its issue is posted.
+		issueID := f.fx.Issue(t, "生产新增审查 2026-09-30", dbfx.Cols{"assignee_type": "agent", "assignee_id": f.agentID})
+		runID := f.fx.Insert(t, "autopilot_run", dbfx.Cols{"autopilot_id": apID, "source": "schedule", "status": "issue_created", "issue_id": issueID})
+		taskID := f.fx.Task(t, f.agentID, dbfx.Cols{"status": "completed", "completed_at": dbfx.Raw("now()"), "issue_id": issueID, "autopilot_run_id": runID})
+		f.fx.Comment(t, issueID, "无新增。", dbfx.Cols{"author_type": "agent", "author_id": f.agentID, "source_task_id": taskID})
+		completed := events.Event{Type: protocol.EventTaskCompleted, TaskID: taskID}
+		f.client.sends = nil
+		if err := f.tools.relayRun(ctx, completed); err != nil {
+			t.Fatal(err)
+		}
+		if len(f.client.sends) != 1 {
+			t.Fatalf("sends = %d, want 1", len(f.client.sends))
+		}
+		got := f.client.sends[0]
+		if got.target.ChatID != "oc_group" || !strings.Contains(got.content, "无新增") || !strings.Contains(got.content, "生产新增审查") || !strings.Contains(got.content, "ou_asker") {
+			t.Fatalf("relayed = %+v", got)
+		}
+		if err := f.tools.relayRun(ctx, completed); err != nil || len(f.client.sends) != 1 {
+			t.Fatalf("duplicate relay: sends = %d, err = %v", len(f.client.sends), err)
+		}
+
+		// run_only: no issue, so the run's output is posted.
+		runOnly := f.fx.Insert(t, "autopilot_run", dbfx.Cols{"autopilot_id": apID, "source": "schedule", "status": "running"})
+		outTask := f.fx.Task(t, f.agentID, dbfx.Cols{"status": "completed", "completed_at": dbfx.Raw("now()"), "autopilot_run_id": runOnly,
+			"result": dbfx.Raw(`'{"output":"昨天共 3 个新接口"}'::jsonb`)})
+		if err := f.tools.relayRun(ctx, events.Event{Type: protocol.EventTaskCompleted, TaskID: outTask}); err != nil {
+			t.Fatal(err)
+		}
+		if len(f.client.sends) != 2 || !strings.Contains(f.client.sends[1].content, "昨天共 3 个新接口") {
+			t.Fatalf("run_only relay: sends = %+v", f.client.sends)
+		}
+	})
+
 	t.Run("create group includes the requester", func(t *testing.T) {
 		chat, err := f.tools.CreateGroup(ctx, f.chatScope, CreateGroupInput{Name: "Team", Members: []string{"ou_b", "ou_asker"}, IncludeRequester: true})
 		if err != nil || chat.ChatID != "oc_created" {

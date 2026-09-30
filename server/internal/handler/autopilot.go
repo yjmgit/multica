@@ -944,6 +944,8 @@ func (h *Handler) CreateAutopilot(w http.ResponseWriter, r *http.Request) {
 		subs = nil
 	}
 
+	h.relayNewAutopilotToFeishu(r, autopilot)
+
 	resp := autopilotToResponse(autopilot, subs)
 	h.publish(protocol.EventAutopilotCreated, workspaceID, "member", userID, map[string]any{"autopilot": resp})
 	obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.AutopilotCreated(
