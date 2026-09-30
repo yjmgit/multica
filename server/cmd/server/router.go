@@ -2447,6 +2447,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Post("/api/lark/docs", h.CreateLarkDoc)
 			r.Post("/api/lark/wakeups", h.ScheduleLarkWakeup)
 			r.Post("/api/lark/relays", h.RegisterLarkRelay)
+			r.Post("/api/lark/delegations", h.DelegateLarkWork)
 			r.Post("/api/lark/autopilot-relays", h.FollowLarkAutopilot)
 			r.Get("/api/lark/chats", h.ListLarkChats)
 			r.Get("/api/lark/members", h.ListLarkChatMembers)

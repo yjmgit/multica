@@ -130,11 +130,16 @@ run posted is sent back to this Feishu chat through your bot (@-mentioning the
 person who asked) — the other agent does not need a Feishu bot. A failed run is
 reported too.
 
+The agent may live in another workspace: any workspace the person who asked
+belongs to works. Name it with --workspace, or leave it out and an agent not
+found here is looked up in all of them.
+
 Write the instructions so the other agent can work without this conversation:
 include the goal, inputs and what to deliver.`,
-	Example: `  $ multica lark delegate --to "数据清洗助手" "清洗附件里的销售表：去重、统一日期格式，结果写成新的 CSV"`,
-	Args:    exactArgs(1),
-	RunE:    runLarkDelegate,
+	Example: `  $ multica lark delegate --to "数据清洗助手" "清洗附件里的销售表：去重、统一日期格式，结果写成新的 CSV"
+  $ multica lark delegate --workspace ai-data-triage --to "EDN 数据开发助手" "查一下 prod 昨天新增的接口"`,
+	Args: exactArgs(1),
+	RunE: runLarkDelegate,
 }
 
 var larkFollowAutopilotCmd = &cobra.Command{
@@ -203,6 +208,7 @@ func init() {
 
 	larkDelegateCmd.Flags().String("to", "", "Agent to hand the work to (name or ID, required)")
 	larkDelegateCmd.Flags().String("title", "", "Issue title (default: the start of the instructions)")
+	larkDelegateCmd.Flags().String("workspace", "", "Workspace of the agent (slug, name or ID); default: this one, then every workspace the requester belongs to")
 
 	larkMembersCmd.Flags().String("chat", "", "chat_id (default: the current conversation)")
 
@@ -584,15 +590,34 @@ func runLarkDelegate(cmd *cobra.Command, args []string) error {
 	if info.CurrentChat == nil {
 		return fmt.Errorf("delegate only works from a task running in a Feishu conversation; use \"multica issue create --assignee\" otherwise")
 	}
+	title, _ := cmd.Flags().GetString("title")
+	workspace, _ := cmd.Flags().GetString("workspace")
+	// An agent in another workspace — named with --workspace, or simply not
+	// found in this one — is reached through the server, acting as the person
+	// who asked in any workspace they belong to.
+	crossWorkspace := func() error {
+		var out map[string]any
+		if err := client.PostJSON(ctx, "/api/lark/delegations", map[string]any{
+			"to": to, "workspace": workspace, "title": title, "instructions": instructions,
+		}, &out); err != nil {
+			return err
+		}
+		return cli.PrintJSON(os.Stdout, out)
+	}
+	if strings.TrimSpace(workspace) != "" {
+		return crossWorkspace()
+	}
 	agentID, err := resolveAgent(ctx, client, to)
 	if err != nil {
-		return fmt.Errorf("resolve agent: %w", err)
+		if crossErr := crossWorkspace(); crossErr != nil {
+			return fmt.Errorf("resolve agent: %w", crossErr)
+		}
+		return nil
 	}
 	if agentID == client.AgentID {
 		return fmt.Errorf("--to names this agent itself; do the work directly instead")
 	}
 
-	title, _ := cmd.Flags().GetString("title")
 	if strings.TrimSpace(title) == "" {
 		title = strings.SplitN(instructions, "\n", 2)[0]
 	}

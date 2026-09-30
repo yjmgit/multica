@@ -58,6 +58,24 @@ func (t *Tools) RegisterRelay(ctx context.Context, scope ToolScope, issueID pgty
 	if issue.WorkspaceID != scope.WorkspaceID {
 		return RelayedIssue{}, invalidInput("issue not found")
 	}
+	return t.registerRelay(ctx, scope, tc, issue)
+}
+
+// RegisterCrossWorkspaceRelay is RegisterRelay for an issue in another
+// workspace. The caller has already checked that the person behind the task
+// may create work there.
+func (t *Tools) RegisterCrossWorkspaceRelay(ctx context.Context, scope ToolScope, issue db.Issue) (RelayedIssue, error) {
+	tc, err := t.resolve(ctx, scope)
+	if err != nil {
+		return RelayedIssue{}, err
+	}
+	if tc.current == nil {
+		return RelayedIssue{}, invalidInput("delegation results can only be relayed from a task running in a Feishu conversation")
+	}
+	return t.registerRelay(ctx, scope, tc, issue)
+}
+
+func (t *Tools) registerRelay(ctx context.Context, scope ToolScope, tc toolContext, issue db.Issue) (RelayedIssue, error) {
 	row, err := t.queries.UpsertChannelIssueRelay(ctx, db.UpsertChannelIssueRelayParams{
 		WorkspaceID:     scope.WorkspaceID,
 		InstallationID:  tc.inst.ID,
@@ -353,4 +371,11 @@ func (t *Tools) autopilotRelayText(ctx context.Context, task db.AgentTaskQueue, 
 		fmt.Fprintf(&b, "\n\n[在 Multica 查看](%s)", link)
 	}
 	return b.String()
+}
+
+// DelegateDescription tells the assignee of a delegated issue where its
+// result goes.
+func DelegateDescription(instructions string) string {
+	return strings.TrimSpace(instructions) + "\n\n---\n" +
+		"Delegated from a Feishu conversation. Post your result as a comment on this issue — the comment each run posts is relayed to that conversation automatically, so write it for the person who asked.\n"
 }
