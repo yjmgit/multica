@@ -31,6 +31,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 	"github.com/multica-ai/multica/server/internal/daemon/repocache"
 	"github.com/multica-ai/multica/server/internal/selfexec"
+	"github.com/multica-ai/multica/server/internal/util"
 	"github.com/multica-ai/multica/server/pkg/agent"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 	"github.com/multica-ai/multica/server/pkg/redact"
@@ -6542,18 +6543,12 @@ func providerNeedsInlineSystemPrompt(provider string) bool {
 // changes, so binding it to workdir reuse discards healthy conversation history
 // and forces the model to reconstruct it through `multica chat history`.
 //
-// A matching workdir is not sufficient on its own. Hermes keys its sessions to
-// HERMES_HOME — the per-task overlay under envRoot — not to the cwd, and the
-// two keys come apart precisely in the local_directory flow: reuse is disabled
-// there (shouldReusePriorWorkdir), so every task builds a fresh overlay with an
-// empty state.db, while envWorkDir stays the user's own directory and therefore
-// still equals PriorWorkDir. The gate read "reused" and forwarded a session id
-// that could not possibly resolve, and Hermes answers an unresolvable resume by
-// silently starting over (GH #6806). sessionHomeReachable is the provider's own
-// answer to "can a prior session still be found here?" — for Hermes, whether
-// the conversation's session store got mounted (execenv.Environment
-// HermesSessionStore) — and false drops the resume with the same disclosure as
-// a workdir mismatch.
+// Hermes is also independent of cwd: its transcript lives in HERMES_HOME's
+// state.db. sessionHomeReachable checks whether the conversation-scoped store
+// mounted by execenv holds history, or whether the task-local home was reused.
+// Requiring the prior cwd as well would discard reachable history whenever a
+// local_directory task gets a new worktree (#9062). An empty or unavailable
+// store must still drop the resume, even when the cwd matches (#6806).
 // sameExistingDir reports whether two paths name the same existing directory.
 // False when either cannot be stat'd, which is the safe answer for cwd-keyed
 // providers: an absent prior workdir means there is nothing to resume from.
@@ -6576,6 +6571,8 @@ func gateResumeToReachableSession(task *Task, taskCtx *execenv.TaskContextForEnv
 	var reachable bool
 	if providerUsesPiSessionFile(provider) {
 		reachable = piSessionResumable(task.PriorSessionID, refusesMissingSessionCwd)
+	} else if provider == "hermes" {
+		reachable = sessionHomeReachable
 	} else {
 		// Compare the directories, not the spelling. Reuse runs in the canonical
 		// path it validated and locked, which need not be character-identical to
@@ -6806,11 +6803,15 @@ func shouldReusePriorWorkdir(task Task, localAssignment *localDirectoryAssignmen
 		return "", false
 	}
 
-	root, err := filepath.EvalSymlinks(workspacesRoot)
+	// util.ResolveSymlinks, not filepath.EvalSymlinks: on Windows the latter
+	// cannot pass through a directory junction, so a junctioned workspaces
+	// root silently declined every reuse and each follow-up lost its session
+	// (#8946).
+	root, err := util.ResolveSymlinks(workspacesRoot)
 	if err != nil {
 		return "", false
 	}
-	workdir, err := filepath.EvalSymlinks(task.PriorWorkDir)
+	workdir, err := util.ResolveSymlinks(task.PriorWorkDir)
 	if err != nil {
 		return "", false
 	}
@@ -7256,11 +7257,12 @@ func (d *Daemon) lockReusablePriorEnvRoot(ctx context.Context, task Task, localA
 		return nil, "", nil, false, nil
 	}
 	priorRoot := filepath.Dir(workDir)
-	// workDir came back through EvalSymlinks, so the root it is measured
-	// against has to be resolved the same way — otherwise a symlinked
-	// workspaces root (macOS /tmp -> /private/tmp, a home on a linked volume)
-	// makes the two look unrelated and every reuse is refused.
-	canonicalWorkspacesRoot, err := filepath.EvalSymlinks(d.cfg.WorkspacesRoot)
+	// workDir came back through util.ResolveSymlinks, so the root it is
+	// measured against has to be resolved the same way — otherwise a symlinked
+	// workspaces root (macOS /tmp -> /private/tmp, a home on a linked volume,
+	// a Windows junction to another drive) makes the two look unrelated and
+	// every reuse is refused.
+	canonicalWorkspacesRoot, err := util.ResolveSymlinks(d.cfg.WorkspacesRoot)
 	if err != nil {
 		return nil, "", nil, false, nil
 	}
@@ -7547,13 +7549,14 @@ func resolveTaskModelSelection(
 
 	// service_tier is catalog-owned and currently Codex-only. As with
 	// thinking_level, stale or incompatible persisted values degrade to the
-	// runtime default instead of failing the task. Catalog lookup errors pass
-	// through so a transient discovery failure does not silently disable a
-	// previously valid user choice.
+	// runtime default instead of failing the task. A catalog that cannot
+	// validate — a lookup error, or a fallback catalog standing in for a
+	// failed discovery — passes the value through, so a discovery failure does
+	// not silently disable a previously valid user choice (MUL-7691).
 	if sel.ServiceTier != "" {
 		ok, err := agent.ValidateServiceTierWith(loadCatalog, provider, sel.Model, sel.ServiceTier)
 		if err != nil {
-			taskLog.Warn("service_tier: catalog lookup failed; passing through",
+			taskLog.Warn("service_tier: catalog cannot validate; passing through",
 				"provider", provider,
 				"model", sel.Model,
 				"service_tier", sel.ServiceTier,
@@ -7569,21 +7572,22 @@ func resolveTaskModelSelection(
 		}
 	}
 	// Per-model guard: the server validates the literal token against the
-	// provider's enum, but per-model gaps (Claude's `xhigh` on a non-Opus
-	// model, Codex's per-model `supported_reasoning_levels`) only resolve
-	// here, against the daemon's local CLI catalog. Invalid combinations
-	// log a warning and drop the level rather than failing the task, so a
-	// stale persisted value never blocks execution. An empty model is
-	// resolved by ValidateThinkingLevelWith to the provider's default model so
-	// default-model tasks aren't misjudged — except for codex, whose empty
+	// provider's enum, but per-model gaps (Codex's per-model
+	// `supported_reasoning_levels`, Claude's per-model `supportedEffortLevels`)
+	// only resolve here, against the daemon's local CLI catalog. Invalid
+	// combinations log a warning and drop the level rather than failing the
+	// task, so a stale persisted value never blocks execution. An empty model
+	// is resolved by ValidateThinkingLevelWith to the provider's default model
+	// so default-model tasks aren't misjudged — except for codex, whose empty
 	// model follows config.toml (any model) and so fails closed, dropping the
-	// level here without a catalog read at all. Discovery errors fail open for
-	// resolved models: if we can't list models, we keep the persisted level
-	// and let the CLI object.
+	// level here without a catalog read at all. Only a verified catalog can
+	// drop a level: on a lookup error or a fallback/empty catalog we keep the
+	// persisted level and let the CLI object, unless the binary itself has no
+	// such effort flag (MUL-7691).
 	if sel.ThinkingLevel != "" {
 		ok, err := agent.ValidateThinkingLevelWith(loadCatalog, provider, sel.Model, sel.ThinkingLevel)
 		if err != nil {
-			taskLog.Warn("thinking_level: catalog lookup failed; passing through",
+			taskLog.Warn("thinking_level: catalog cannot validate; passing through",
 				"provider", provider,
 				"model", sel.Model,
 				"thinking_level", sel.ThinkingLevel,
@@ -7986,10 +7990,10 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	var hermesSessionStore string
 	if provider == "hermes" {
 		// Resolve from the argv hermes will actually parse — launch prefix,
-		// `acp`, then the filtered custom args — which agent.HermesLaunchArgv
+		// the filtered custom args, then `acp` — which agent.HermesLaunchArgv
 		// assembles the same way the backend does. A custom runtime profile's
 		// fixed_args are the launch prefix now, so they are scanned before
-		// custom_args, and the backend's own `acp` token sits between them and
+		// custom_args, and the backend's own `acp` token closes the argv and
 		// participates in the scan. Approximating that argv reads a different
 		// profile than the process does, and the overlay ends up seeded from
 		// the wrong home (GH #7046).
@@ -8560,8 +8564,8 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// The overlay is authoritative once built, so nothing on the command line
 	// may re-point HERMES_HOME out of it. Both argv regions are stripped
 	// together, against the same assembled argv the resolver read: a selection
-	// can straddle them (a prefix ending in a bare `-p` captures the backend's
-	// `acp`), which per-region stripping cannot see.
+	// can straddle them (a prefix ending in a bare `-p` captures the first
+	// custom arg), which per-region stripping cannot see.
 	var hermesOverlayCustomArgs []string
 	hermesOverlayActive := provider == "hermes" && env != nil && env.HermesHome != ""
 	if hermesOverlayActive {
